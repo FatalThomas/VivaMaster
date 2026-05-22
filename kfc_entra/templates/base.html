@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}KFC Entra User Manager{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="{{ url_for('main.landing') }}">
+      <span class="brand-mark">KFC</span>
+      <span class="brand-text">Entra User Manager</span>
+    </a>
+    <nav>
+      {% if current_user %}
+        <a href="{{ url_for('main.dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('main.users_list') }}">Users</a>
+        <a href="{{ url_for('main.add_user') }}">Add user</a>
+        <span class="who">{{ current_user.get('name') or current_user.get('preferred_username') }}</span>
+        <a class="logout" href="{{ url_for('auth.logout') }}">Sign out</a>
+      {% endif %}
+    </nav>
+  </div>
+</header>
+
+<main class="container">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flashes">
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="footer">
+  <span>KFC Entra User Manager &middot; built on Microsoft Graph</span>
+</footer>
+</body>
+</html>

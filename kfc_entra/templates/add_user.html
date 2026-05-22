@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Add user - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Add a new user</h1>
+  <p class="muted">
+    Sends a Microsoft invitation, then automatically flips the new account from
+    <strong>Guest</strong> to <strong>Member</strong>.
+  </p>
+  <form method="post" class="form">
+    <label class="field">
+      <span>Email address</span>
+      <input type="email" name="email" required autofocus
+             placeholder="jane.doe@example.com"
+             value="{{ form.email or '' }}">
+    </label>
+
+    <label class="field">
+      <span>Display name <small>(optional - inferred from email if left blank)</small></span>
+      <input type="text" name="display_name"
+             placeholder="Jane Doe"
+             value="{{ form.display_name or '' }}">
+    </label>
+
+    <label class="checkbox">
+      <input type="checkbox" name="send_invitation_message"
+             {% if form.send_invitation_message or form.send_invitation_message is not defined %}checked{% endif %}>
+      <span>Send the user an invitation email</span>
+    </label>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Invite &amp; set as Member</button>
+      <a class="btn btn-secondary" href="{{ url_for('main.dashboard') }}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

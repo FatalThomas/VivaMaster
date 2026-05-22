@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Users - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Users</h1>
+    <a class="btn btn-primary" href="{{ url_for('main.add_user') }}">+ Add user</a>
+  </div>
+
+  <form method="get" class="searchbar">
+    <input type="search" name="q" value="{{ search }}" placeholder="Search by name, email, or UPN">
+    <button type="submit" class="btn btn-secondary">Search</button>
+    {% if search %}
+      <a class="btn btn-link" href="{{ url_for('main.users_list') }}">Clear</a>
+    {% endif %}
+  </form>
+
+  {% if users %}
+  <table class="users-table">
+    <thead>
+      <tr>
+        <th>Display name</th>
+        <th>UPN / Email</th>
+        <th>Type</th>
+        <th>Enabled</th>
+        <th class="actions-col">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>
+          <form method="post" action="{{ url_for('main.update_display_name', user_id=u.id) }}" class="inline-edit">
+            <input type="text" name="display_name" value="{{ u.display_name }}">
+            <button type="submit" class="btn btn-tiny" title="Save display name">Save</button>
+          </form>
+        </td>
+        <td class="mono">{{ u.mail or u.user_principal_name }}</td>
+        <td>
+          {% if u.user_type == 'Member' %}
+            <span class="badge badge-member">Member</span>
+          {% elif u.user_type == 'Guest' %}
+            <span class="badge badge-guest">Guest</span>
+          {% else %}
+            <span class="badge">{{ u.user_type or 'unknown' }}</span>
+          {% endif %}
+        </td>
+        <td>{{ 'Yes' if u.account_enabled else 'No' }}</td>
+        <td class="actions-col">
+          {% if u.user_type == 'Guest' %}
+            <form method="post" action="{{ url_for('main.convert_to_member', user_id=u.id) }}">
+              <button type="submit" class="btn btn-tiny btn-primary">Make Member</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">No users found{% if search %} matching "{{ search }}"{% endif %}.</p>
+  {% endif %}
+</section>
+{% endblock %}

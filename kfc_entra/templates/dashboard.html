@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Welcome{% if user %}, {{ user.get('name') or user.get('preferred_username') }}{% endif %}</h1>
+  <p>Choose what you'd like to do.</p>
+  <div class="card-grid">
+    <a class="card" href="{{ url_for('main.add_user') }}">
+      <h2>Add a user</h2>
+      <p>Invite a new colleague by email. They'll be created as a Guest and instantly converted to Member.</p>
+    </a>
+    <a class="card" href="{{ url_for('main.users_list') }}">
+      <h2>Browse users</h2>
+      <p>Search, edit display names, or promote existing Guests to Members.</p>
+    </a>
+  </div>
+</section>
+{% endblock %}
