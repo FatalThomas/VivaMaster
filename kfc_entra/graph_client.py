@@ -257,16 +257,23 @@ class GraphClient:
         return [GraphGroup.from_api(g) for g in raw]
 
     def create_group(self, display_name: str, description: str | None = None) -> GraphGroup:
-        """Create a security group (no mailbox)."""
+        """Create a Microsoft 365 (Unified) group.
+
+        Viva Engage communities and Teams sit on top of Microsoft 365
+        groups, so this is what KFC actually needs - not a plain security
+        group. The signed-in user needs the Groups Administrator role (or
+        an equivalent role / tenant setting that permits M365 group
+        creation) for this to succeed.
+        """
         from .groups import sanitise_mail_nickname  # local import avoids cycle
 
         body = {
             "displayName": display_name,
             "description": description or "Created by KFC Entra User Manager",
-            "mailEnabled": False,
-            "securityEnabled": True,
+            "mailEnabled": True,
+            "securityEnabled": False,
             "mailNickname": sanitise_mail_nickname(display_name),
-            "groupTypes": [],
+            "groupTypes": ["Unified"],
         }
         resp = self._request("POST", "/groups", json=body)
         return GraphGroup.from_api(resp.json())
