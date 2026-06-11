@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="KFC on Viva Engage">
+  <!-- Viva Engage speech-bubble silhouette in KFC red, with a chat tail pointing
+       lower-left to evoke a community conversation. -->
+  <path
+    d="M14 8 H56
+       a4 4 0 0 1 4 4
+       V44
+       a4 4 0 0 1 -4 4
+       H26
+       L14 58
+       V48
+       H14
+       a4 4 0 0 1 -4 -4
+       V12
+       a4 4 0 0 1 4 -4 Z"
+    fill="#e4002b"/>
+  <!-- KFC wordmark, slightly oversized for legibility at favicon sizes. -->
+  <text x="35" y="34"
+        text-anchor="middle"
+        font-family="'Trebuchet MS', 'Arial Black', sans-serif"
+        font-weight="900"
+        font-size="20"
+        fill="#ffffff"
+        letter-spacing="1.5">KFC</text>
+</svg>

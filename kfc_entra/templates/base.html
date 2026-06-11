@@ -4,13 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}KFC Entra User Manager{% endblock %}</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg') }}">
+<link rel="alternate icon" href="{{ url_for('static', filename='img/app.ico') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
 <body>
 <header class="topbar">
   <div class="topbar-inner">
     <a class="brand" href="{{ url_for('main.landing') }}">
-      <span class="brand-mark">KFC</span>
+      <span class="brand-mark" aria-label="KFC on Viva Engage">
+        <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="" width="32" height="32">
+      </span>
       <span class="brand-text">Entra User Manager</span>
     </a>
     <nav>

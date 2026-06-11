@@ -43,6 +43,7 @@ exe = EXE(
     a.datas,
     [],
     name="KFC Entra User Manager",
+    icon="kfc_entra/static/img/app.ico",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
