@@ -1,26 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="KFC on Viva Engage">
-  <!-- Viva Engage speech-bubble silhouette in KFC red, with a chat tail pointing
-       lower-left to evoke a community conversation. -->
-  <path
-    d="M14 8 H56
-       a4 4 0 0 1 4 4
-       V44
-       a4 4 0 0 1 -4 4
-       H26
-       L14 58
-       V48
-       H14
-       a4 4 0 0 1 -4 -4
-       V12
-       a4 4 0 0 1 4 -4 Z"
-    fill="#e4002b"/>
-  <!-- KFC wordmark, slightly oversized for legibility at favicon sizes. -->
-  <text x="35" y="34"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="KFC bucket">
+  <!-- Bucket body: trapezoid, wider at the top like a chicken bucket. -->
+  <path d="M10 17 L54 17 L50 57 Q49.5 60 47 60 L17 60 Q14.5 60 14 57 Z"
+        fill="#e4002b"/>
+  <!-- Subtle highlight up the left side to give the body some shape. -->
+  <path d="M14 19 L18 19 L21 58 L17 58 Z"
+        fill="#ffffff" opacity="0.12"/>
+  <!-- Rolled paper rim at the top: white ellipse with a darker red edge. -->
+  <ellipse cx="32" cy="17" rx="22" ry="3.5" fill="#ffffff"/>
+  <ellipse cx="32" cy="17" rx="22" ry="3.5" fill="none" stroke="#b80022" stroke-width="1"/>
+  <!-- White oval badge centred on the front, like the storefront roundel. -->
+  <ellipse cx="32" cy="37" rx="16" ry="11" fill="#ffffff"/>
+  <!-- KFC wordmark in the badge. -->
+  <text x="32" y="41"
         text-anchor="middle"
         font-family="'Trebuchet MS', 'Arial Black', sans-serif"
         font-weight="900"
-        font-size="20"
-        fill="#ffffff"
-        letter-spacing="1.5">KFC</text>
+        font-size="13"
+        fill="#e4002b"
+        letter-spacing="0.5">KFC</text>
 </svg>
