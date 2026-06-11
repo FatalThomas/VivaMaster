@@ -219,18 +219,41 @@ class GraphClient:
 
     # ---------- groups ----------
     def list_groups(self, search: str | None = None) -> list[GraphGroup]:
+        # Listing /groups with $orderby (and optionally $filter) is an
+        # "advanced query" in Microsoft Graph: it requires both
+        # ConsistencyLevel: eventual and $count=true. Without them the
+        # request fails with 400 "Invalid search request" / "Request_*".
         params: dict[str, Any] = {
             "$select": "id,displayName,description,mailNickname",
             "$top": 999,
+            "$count": "true",
             "$orderby": "displayName",
         }
-        extra_headers: dict | None = None
         if search:
             safe = search.replace("'", "''")
             params["$filter"] = f"startswith(displayName, '{safe}')"
-            params["$count"] = "true"
-            extra_headers = {"ConsistencyLevel": "eventual"}
-        raw = self._collect_paged("/groups", params=params, extra_headers=extra_headers)
+        try:
+            raw = self._collect_paged(
+                "/groups",
+                params=params,
+                extra_headers={"ConsistencyLevel": "eventual"},
+            )
+        except GraphError:
+            # Fallback for tenants that block advanced queries: do the
+            # simplest possible list call and sort / filter client-side.
+            simple = {
+                "$select": "id,displayName,description,mailNickname",
+                "$top": 999,
+            }
+            raw = self._collect_paged("/groups", params=simple)
+            if search:
+                term = search.lower()
+                raw = [
+                    g
+                    for g in raw
+                    if (g.get("displayName") or "").lower().startswith(term)
+                ]
+            raw.sort(key=lambda g: (g.get("displayName") or "").lower())
         return [GraphGroup.from_api(g) for g in raw]
 
     def create_group(self, display_name: str, description: str | None = None) -> GraphGroup:
