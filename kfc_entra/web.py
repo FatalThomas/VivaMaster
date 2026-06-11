@@ -212,11 +212,24 @@ def users_list():
         type_filter = "all"
     client = GraphClient(get_access_token())
     try:
-        users = list_users_sorted(client, search=search)
-        if type_filter == "members":
-            users = [u for u in users if u.user_type == "Member"]
-        elif type_filter == "guests":
-            users = [u for u in users if u.user_type == "Guest"]
+        if search:
+            # Search path: $search returns the first matching page (Graph
+            # caps it). The type filter is then applied client-side on
+            # whatever came back - best effort for partial matches.
+            users = list_users_sorted(client, search=search)
+            if type_filter == "members":
+                users = [u for u in users if u.user_type == "Member"]
+            elif type_filter == "guests":
+                users = [u for u in users if u.user_type == "Guest"]
+        else:
+            # Browse path: push the userType filter to Graph and walk every
+            # page so the listing reflects the *whole* tenant, not just the
+            # first 100 names alphabetically. This is what was breaking
+            # "Guests only" - the unpaginated 100-user fetch could easily
+            # contain zero guests in a large tenant.
+            wanted = {"members": "Member", "guests": "Guest"}.get(type_filter)
+            users = client.list_users_by_type(wanted)
+            users.sort(key=lambda u: (u.display_name or "").lower())
         return render_template(
             "users_list.html",
             users=users,
