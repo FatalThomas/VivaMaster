@@ -174,6 +174,11 @@ if %tries% leq 0 exit /b 1
 ping -n 2 127.0.0.1 >NUL
 goto loop
 :done
+REM Pause a few seconds before launching: Windows Defender is mid-scan on the
+REM freshly-copied exe, and launching during that scan can leave PyInstaller
+REM unable to load python.dll's dependencies. The popup looks scary but
+REM resolves itself - this delay avoids it.
+ping -n 4 127.0.0.1 >NUL
 start "" "{target_exe}"
 del "{new_exe}" >NUL 2>&1
 del "%~f0"
