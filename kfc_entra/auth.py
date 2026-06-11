@@ -49,13 +49,43 @@ def _purge_expired_unlocked() -> None:
         _PENDING.pop(k, None)
 
 
+def _flow_info(flow_id: str, flow: dict) -> dict:
+    verification_uri = flow.get("verification_uri", "https://microsoft.com/devicelogin")
+    user_code = flow["user_code"]
+    return {
+        "flow_id": flow_id,
+        "user_code": user_code,
+        "verification_uri": verification_uri,
+        # Microsoft accepts ?otc=CODE on the devicelogin page to pre-fill the
+        # code, so the user just signs in - no copy/paste required.
+        "verification_uri_complete": f"{verification_uri}?otc={user_code}",
+        "message": flow.get("message", ""),
+        "expires_in": flow.get("expires_in", 900),
+    }
+
+
 def start_device_flow() -> dict:
     """Initiate device flow and spawn the background MSAL poller.
 
-    Returns the user-facing flow info (code, verification URI, message).
-    Raises RuntimeError if Microsoft refuses to start the flow.
+    Idempotent: if the session already has a pending (not yet completed)
+    device flow with plenty of time left, that flow's code is reused
+    instead of starting a new one. This way re-hitting /login - whether
+    from a button, a refresh, or pywebview navigating away and back -
+    never silently invalidates the code the user just pasted into
+    Microsoft.
     """
     cfg = current_app.config["KFC_CONFIG"]
+
+    existing_id = session.get("device_flow_id")
+    if existing_id:
+        with _LOCK:
+            entry = _PENDING.get(existing_id)
+            if entry is not None and entry["result"] is None:
+                age = time.time() - entry["started"]
+                # Keep a 60s buffer so we don't hand back a code about to expire.
+                if age < _TTL_SECONDS - 60:
+                    return _flow_info(existing_id, entry["flow"])
+
     msal_app = _build_msal_app()
     flow = msal_app.initiate_device_flow(scopes=cfg.scopes)
     if "user_code" not in flow:
@@ -97,13 +127,7 @@ def start_device_flow() -> dict:
     ).start()
 
     session["device_flow_id"] = flow_id
-    return {
-        "flow_id": flow_id,
-        "user_code": flow["user_code"],
-        "verification_uri": flow.get("verification_uri", "https://microsoft.com/devicelogin"),
-        "message": flow.get("message", ""),
-        "expires_in": flow.get("expires_in", 900),
-    }
+    return _flow_info(flow_id, flow)
 
 
 def poll_device_flow() -> dict:

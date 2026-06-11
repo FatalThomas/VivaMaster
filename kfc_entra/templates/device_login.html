@@ -4,11 +4,18 @@
 <section class="panel device-panel">
   <h1>Sign in to Microsoft</h1>
   <p class="muted">
-    Enter the code below at <b>microsoft.com/devicelogin</b>. This window
-    will switch to the dashboard as soon as you've signed in.
+    Three steps. The dashboard loads here as soon as you've signed in.
   </p>
 
-  <div class="device-code" id="device-code">{{ info.user_code }}</div>
+  <ol class="device-steps">
+    <li>Click <b>Open Microsoft sign-in</b> below. Your default browser
+        opens with the code already filled in.</li>
+    <li>Sign in with your KFC work account.</li>
+    <li>Come back to <b>this window</b>. It'll switch to the dashboard
+        automatically.</li>
+  </ol>
+
+  <div class="device-code" id="device-code" title="Click to copy">{{ info.user_code }}</div>
 
   <div class="actions device-actions">
     <button type="button" class="btn btn-primary" id="open-browser-btn">
@@ -20,21 +27,18 @@
   </div>
 
   <p class="muted device-fallback">
-    Or visit
-    <a href="{{ info.verification_uri }}" target="_blank" rel="noopener">
-      {{ info.verification_uri }}
-    </a>
-    in any browser and enter the code above.
+    Browser didn't open? Visit
+    <code class="device-url" id="device-url">{{ info.verification_uri }}</code>
+    in any browser and paste the code above.
   </p>
 
-  <div id="auth-status" class="device-status">
+  <div id="auth-status" class="device-status device-status-pending">
     <span class="spinner" aria-hidden="true"></span>
     Waiting for sign-in&hellip;
   </div>
 
   <p class="muted device-trouble">
-    Sign-in not finishing? <a href="{{ url_for('auth.login') }}">Get a new code</a>
-    or <a href="{{ url_for('main.landing') }}">cancel and go back</a>.
+    Stuck? <a href="{{ url_for('main.landing') }}">Cancel and go back</a>.
   </p>
 </section>
 {% endblock %}
@@ -43,56 +47,74 @@
 <script>
 (function () {
   var code = {{ info.user_code | tojson }};
-  var verify = {{ info.verification_uri | tojson }};
+  var verifyPlain = {{ info.verification_uri | tojson }};
+  var verifyPrefilled = {{ info.verification_uri_complete | tojson }};
   var statusEl = document.getElementById("auth-status");
+  var pollingStopped = false;
 
-  function setStatus(text, cls) {
-    statusEl.innerHTML = (cls === "pending" ? '<span class="spinner"></span>' : "") + text;
+  function setStatus(html, cls) {
+    var prefix = cls === "pending" ? '<span class="spinner"></span> ' : "";
+    statusEl.innerHTML = prefix + html;
     statusEl.className = "device-status device-status-" + (cls || "pending");
   }
 
-  document.getElementById("copy-code-btn").addEventListener("click", function () {
-    navigator.clipboard.writeText(code)
-      .then(function () { kfcToast("Code copied to clipboard.", "success"); })
-      .catch(function () { kfcToast("Couldn't copy - select the code and copy manually.", "warning"); });
-  });
+  function copyCode(silent) {
+    return navigator.clipboard.writeText(code).then(function () {
+      if (!silent) kfcToast("Code copied to clipboard.", "success");
+    }).catch(function () {
+      if (!silent) kfcToast("Couldn't copy - select the code manually.", "warning");
+    });
+  }
+
+  document.getElementById("device-code").addEventListener("click", function () { copyCode(false); });
+  document.getElementById("copy-code-btn").addEventListener("click", function () { copyCode(false); });
 
   document.getElementById("open-browser-btn").addEventListener("click", function () {
-    // Copy the code first so the user can paste it once the browser opens.
-    navigator.clipboard.writeText(code).catch(function () {});
+    // Copy first as a fallback in case the prefilled URL fails to populate.
+    copyCode(true);
     fetch({{ url_for('auth.login_open_browser') | tojson }}, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       credentials: "same-origin",
-      body: JSON.stringify({url: verify}),
+      body: JSON.stringify({url: verifyPrefilled}),
     })
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (data.opened) {
-        kfcToast("Browser opened. Paste the code (already on your clipboard).", "success");
+        kfcToast("Browser opened. Sign in there - this window will catch up.", "success");
       } else {
-        kfcToast("Couldn't open your browser - visit " + verify + " manually.", "warning");
+        kfcToast("Couldn't launch a browser. Visit " + verifyPlain + " manually.", "warning");
       }
     })
     .catch(function () {
-      kfcToast("Couldn't open your browser - visit " + verify + " manually.", "warning");
+      kfcToast("Couldn't launch a browser. Visit " + verifyPlain + " manually.", "warning");
     });
   });
 
   function poll() {
+    if (pollingStopped) return;
     fetch({{ url_for('auth.login_status') | tojson }}, {credentials: "same-origin"})
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data.status === "success") {
-          setStatus("Signed in. Loading the dashboard…", "success");
+          pollingStopped = true;
+          setStatus("Signed in. Loading the dashboard&hellip;", "success");
           window.location.href = {{ url_for('main.dashboard') | tojson }};
         } else if (data.status === "pending") {
           setTimeout(poll, 2500);
         } else if (data.status === "expired") {
-          setStatus("Code expired. <a href=\"" + {{ url_for('auth.login') | tojson }} + "\">Get a new one</a>.", "error");
+          pollingStopped = true;
+          setStatus(
+            "Code expired. <a href=\"" + {{ url_for('auth.login') | tojson }} +
+            "\">Get a new one</a>.", "error"
+          );
         } else {
-          setStatus("Sign-in failed: " + (data.error || "unknown error") +
-                    " <a href=\"" + {{ url_for('auth.login') | tojson }} + "\">Try again</a>.", "error");
+          pollingStopped = true;
+          setStatus(
+            "Sign-in failed: " + (data.error || "unknown error") +
+            ". <a href=\"" + {{ url_for('auth.login') | tojson }} + "\">Try again</a>.",
+            "error"
+          );
         }
       })
       .catch(function () { setTimeout(poll, 5000); });
