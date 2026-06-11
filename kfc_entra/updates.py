@@ -28,7 +28,6 @@ from .version import __version__
 
 REPO = "FatalThomas/VivaMaster"
 LATEST_RELEASE_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
-CHECK_EVERY_SECONDS = 24 * 3600
 REQUEST_TIMEOUT = 6
 
 
@@ -109,28 +108,28 @@ def _fetch_latest() -> UpdateInfo | None:
 
 
 def _check() -> None:
-    global _available
+    """Hit GitHub Releases once per launch and update _available accordingly.
 
-    cache = _load_cache()
-    if cache:
-        try:
-            checked_at = datetime.fromisoformat(cache["checked_at"])
-            age = (datetime.now(timezone.utc) - checked_at).total_seconds()
-        except (KeyError, ValueError):
-            age = CHECK_EVERY_SECONDS + 1
-        if age < CHECK_EVERY_SECONDS and cache.get("latest"):
-            info = UpdateInfo(**cache["latest"])
-            if _is_newer(info.latest_version, __version__):
-                with _lock:
-                    _available = info
-            return
+    The disk cache is still written (it's useful for diagnostics) but the
+    freshness gate is gone: every launch checks GitHub. Network errors
+    fall back to whatever was cached last time so the banner can still
+    appear while the user is briefly offline.
+    """
+    global _available
 
     try:
         info = _fetch_latest()
     except requests.RequestException:
-        return
+        info = None
+
     if info is None:
-        return
+        # Network failure - fall back to the previous result on disk so
+        # we still show the banner when the user is briefly offline.
+        cache = _load_cache()
+        if cache and cache.get("latest"):
+            info = UpdateInfo(**cache["latest"])
+        else:
+            return
 
     _save_cache(
         {
