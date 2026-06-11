@@ -53,7 +53,7 @@ a:hover { text-decoration: underline; }
   align-items: center;
   justify-content: center;
 }
-.brand-mark img { display: block; width: 30px; height: 30px; }
+.brand-mark img { display: block; height: 32px; width: auto; }
 .brand-text { opacity: .95; }
 .topbar nav {
   display: flex;
