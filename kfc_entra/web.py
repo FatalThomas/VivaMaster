@@ -1,7 +1,10 @@
 """Flask app factory and routes for the KFC Entra User Manager."""
 from __future__ import annotations
 
+import csv
+import io
 import json
+import re
 import uuid
 from collections import OrderedDict
 
@@ -327,6 +330,46 @@ def install_update():
         return jsonify({"error": str(exc)}), 502
     install_update_and_restart(new_exe)
     return jsonify({"status": "restarting", "version": info.latest_version})
+
+
+# ---------- generic CSV download ----------
+# pywebview's WebView2 backend silently blocks JS-initiated Blob URL downloads
+# (`<a download>` clicks created in script), so the failure-CSV button on
+# bulk operations never produced a file. This endpoint generates the CSV
+# server-side and returns it as a real attachment - the browser handles it
+# natively, which works in WebView2 too.
+@main_bp.route("/downloads/csv", methods=["POST"])
+@login_required
+def download_csv():
+    raw = request.form.get("payload") or ""
+    try:
+        payload = json.loads(raw) if raw else (request.get_json(silent=True) or {})
+    except (ValueError, TypeError):
+        payload = {}
+
+    filename = (payload.get("filename") or "download.csv").strip()
+    filename = re.sub(r"[^\w\-. ]", "", filename) or "download.csv"
+    if not filename.lower().endswith(".csv"):
+        filename = filename + ".csv"
+
+    headers_row = payload.get("headers") or []
+    rows = payload.get("rows") or []
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\r\n")
+    if headers_row:
+        writer.writerow(headers_row)
+    for row in rows:
+        writer.writerow([(v if v is not None else "") for v in row])
+
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 # ---------- bulk convert (SSE) ----------

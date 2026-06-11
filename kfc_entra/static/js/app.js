@@ -99,21 +99,27 @@
     });
   }
 
-  /* ---------- CSV download ---------- */
+  /* ---------- CSV download ----------
+     pywebview's WebView2 backend silently blocks JS-initiated Blob URL
+     downloads, so we POST to /downloads/csv which sends back a real
+     Content-Disposition attachment - the browser handles that natively. */
   function kfcDownloadCsv(filename, headers, rows) {
-    function esc(v) {
-      v = String(v == null ? "" : v);
-      return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
-    }
-    var lines = [headers.map(esc).join(",")];
-    rows.forEach(function (r) { lines.push(r.map(esc).join(",")); });
-    var blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    var form = document.createElement("form");
+    form.method = "POST";
+    form.action = "/downloads/csv";
+    form.style.display = "none";
+    var input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "payload";
+    input.value = JSON.stringify({
+      filename: filename,
+      headers: headers,
+      rows: rows,
+    });
+    form.appendChild(input);
+    document.body.appendChild(form);
+    form.submit();
+    setTimeout(function () { form.remove(); }, 500);
   }
 
   /* ---------- bulk progress panel ----------
