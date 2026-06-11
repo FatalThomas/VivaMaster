@@ -67,6 +67,7 @@
       headers: { "Accept": "text/event-stream" },
       credentials: "same-origin",
     };
+    if (options.signal) fetchOpts.signal = options.signal;
     if (options.body !== undefined) {
       fetchOpts.headers["Content-Type"] = "application/json";
       fetchOpts.body = JSON.stringify(options.body);
@@ -124,6 +125,7 @@
       '<div class="bulk-head">' +
       '  <span class="spinner"></span>' +
       '  <span class="bulk-status">Starting...</span>' +
+      '  <button type="button" class="btn btn-tiny btn-secondary bulk-cancel">Cancel</button>' +
       '</div>' +
       '<div class="bulk-bar"><div class="bulk-bar-fill" style="width:0%"></div></div>' +
       '<div class="bulk-log" aria-live="polite"></div>';
@@ -132,9 +134,22 @@
     var statusEl = panel.querySelector(".bulk-status");
     var fillEl = panel.querySelector(".bulk-bar-fill");
     var logEl = panel.querySelector(".bulk-log");
+    var cancelBtn = panel.querySelector(".bulk-cancel");
     var total = 0;
     var failures = [];
+    var lastProgress = null;
     var verb = cfg.verb || "Converting";
+
+    var controller = ("AbortController" in window) ? new AbortController() : null;
+    var cancelled = false;
+    cancelBtn.addEventListener("click", function () {
+      if (cancelled) return;
+      cancelled = true;
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = "Cancelling...";
+      statusEl.textContent = "Cancelling - waiting for current item to finish...";
+      if (controller) controller.abort();
+    });
 
     function logLine(cls, text, reason) {
       var line = document.createElement("div");
@@ -161,7 +176,10 @@
           logLine("line-skip", "→ " + ev.franchisee + " → " + ev.group_name);
         }
       } else if (ev.type === "progress") {
-        statusEl.textContent = verb + " " + ev.current + " of " + ev.total + "...";
+        lastProgress = ev;
+        if (!cancelled) {
+          statusEl.textContent = verb + " " + ev.current + " of " + ev.total + "...";
+        }
         fillEl.style.width = (ev.total ? (100 * ev.current / ev.total) : 100) + "%";
         if (ev.status === "ok" || ev.status === "added") {
           logLine("line-ok", "✓ " + ev.user);
@@ -174,6 +192,7 @@
           failures.push(ev);
         }
       } else if (ev.type === "done") {
+        if (cancelBtn) cancelBtn.hidden = true;
         renderSummary(ev.summary);
       } else if (ev.type === "error") {
         statusEl.textContent = "Failed";
@@ -232,15 +251,48 @@
       if (cfg.onDone) cfg.onDone(summary);
     }
 
-    return kfcStream(cfg.url, { method: cfg.method, body: cfg.body }, onEvent)
-      .catch(function (err) {
-        statusEl.textContent = "Stream error";
-        var sp = panel.querySelector(".spinner");
-        if (sp) sp.remove();
-        logLine("line-fail", "✗ " + err.message);
-        kfcToast(err.message, "error");
-        if (cfg.onDone) cfg.onDone(null);
-      });
+    return kfcStream(
+      cfg.url,
+      { method: cfg.method, body: cfg.body, signal: controller && controller.signal },
+      onEvent
+    ).catch(function (err) {
+      if (cancelled || (err && err.name === "AbortError")) {
+        renderCancelled();
+        return;
+      }
+      statusEl.textContent = "Stream error";
+      var sp = panel.querySelector(".spinner");
+      if (sp) sp.remove();
+      logLine("line-fail", "✗ " + err.message);
+      kfcToast(err.message, "error");
+      if (cfg.onDone) cfg.onDone(null);
+    });
+
+    function renderCancelled() {
+      var sp = panel.querySelector(".spinner");
+      if (sp) sp.remove();
+      if (cancelBtn) cancelBtn.remove();
+      var done = lastProgress ? lastProgress.current : 0;
+      var of = lastProgress ? lastProgress.total : total;
+      statusEl.textContent = "Cancelled" + (of ? " after " + done + " of " + of : "");
+      logLine("line-skip", "○ Cancelled by user. Items already finished are not rolled back.");
+      if (failures.length) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn btn-secondary";
+        btn.textContent = "Download failures CSV (" + failures.length + ")";
+        btn.addEventListener("click", function () {
+          kfcDownloadCsv(
+            cfg.failuresCsvName || "failures.csv",
+            ["user", "franchisee", "reason"],
+            failures.map(function (f) { return [f.user, f.franchisee || "", f.reason]; })
+          );
+        });
+        panel.appendChild(btn);
+      }
+      kfcToast("Cancelled.", "warning");
+      if (cfg.onDone) cfg.onDone(null);
+    }
   }
 
   /* ---------- buttons: disable + spinner while busy ---------- */
