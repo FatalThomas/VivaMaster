@@ -14,6 +14,9 @@ visible to the next top-level navigation.
 """
 from __future__ import annotations
 
+import os
+import platform
+import subprocess
 import threading
 import time
 import webbrowser
@@ -210,12 +213,44 @@ def open_in_system_browser(url: str) -> bool:
 
     Only Microsoft sign-in hosts are allowed, so a malicious page on the
     local port can't trick the app into launching arbitrary URLs.
+
+    Tries OS-native handlers first because Python's `webbrowser` module
+    is unreliable inside a PyInstaller-frozen exe - it walks env vars
+    and registry entries that aren't always present in that context and
+    can return True without actually launching anything.
     """
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.netloc.lower() not in _BROWSER_OPEN_ALLOWLIST:
         return False
+
+    system = platform.system()
+
+    # Windows: ShellExecute via os.startfile is the OS-native way to open
+    # a URL with the default browser. Works reliably inside frozen exes.
+    if system == "Windows" and hasattr(os, "startfile"):
+        try:
+            os.startfile(url)  # type: ignore[attr-defined]
+            return True
+        except OSError:
+            pass
+
+    # macOS / Linux: defer to the shell URL opener.
+    if system == "Darwin":
+        try:
+            subprocess.Popen(["open", url])
+            return True
+        except (OSError, FileNotFoundError):
+            pass
+    elif system == "Linux":
+        try:
+            subprocess.Popen(["xdg-open", url])
+            return True
+        except (OSError, FileNotFoundError):
+            pass
+
+    # Last-resort fallback: Python's webbrowser module.
     try:
-        return webbrowser.open(url, new=2)
+        return bool(webbrowser.open(url, new=2))
     except Exception:
         return False
 
