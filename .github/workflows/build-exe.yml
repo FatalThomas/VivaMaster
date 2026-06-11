@@ -1,13 +1,20 @@
-# Builds the Windows exe. Runs on every push of a version tag (v1.0.0,
-# v1.1.0, ...) and publishes the exe as a GitHub Release - which is what the
-# in-app update checker looks for. Can also be run manually from the Actions
-# tab to get a downloadable artifact without cutting a release.
+# Builds the Windows exe and publishes it as a GitHub Release - which is
+# what the in-app update checker looks for. Two ways to release:
+#   - push a version tag (v1.0.0) matching kfc_entra/version.py, or
+#   - run the workflow manually from the Actions tab with
+#     "publish_release" ticked: it tags the current version for you.
+# A manual run without the box ticked just builds a downloadable artifact.
 name: Build Windows exe
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Also publish a GitHub Release (tags v<version> from kfc_entra/version.py)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -25,14 +32,26 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Read version from kfc_entra/version.py
+        id: ver
+        shell: python
+        run: |
+          import os, re
+          src = open("kfc_entra/version.py", encoding="utf-8").read()
+          version = re.search(r'__version__\s*=\s*"([^"]+)"', src).group(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"version={version}\n")
+          print(f"App version: {version}")
+
       - name: Check tag matches kfc_entra/version.py
         if: startsWith(github.ref, 'refs/tags/')
         shell: python
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          import os, re, sys
+          import os, sys
           tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
-          src = open("kfc_entra/version.py", encoding="utf-8").read()
-          version = re.search(r'__version__\s*=\s*"([^"]+)"', src).group(1)
+          version = os.environ["APP_VERSION"]
           if tag != version:
               sys.exit(f"Tag v{tag} does not match __version__ {version!r} - "
                        "bump kfc_entra/version.py before tagging.")
@@ -48,8 +67,9 @@ jobs:
           path: dist/KFC Entra User Manager.exe
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish_release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.ver.outputs.version }}
           files: dist/KFC Entra User Manager.exe
           generate_release_notes: true
