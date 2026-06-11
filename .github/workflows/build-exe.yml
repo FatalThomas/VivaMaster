@@ -1,0 +1,55 @@
+# Builds the Windows exe. Runs on every push of a version tag (v1.0.0,
+# v1.1.0, ...) and publishes the exe as a GitHub Release - which is what the
+# in-app update checker looks for. Can also be run manually from the Actions
+# tab to get a downloadable artifact without cutting a release.
+name: Build Windows exe
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check tag matches kfc_entra/version.py
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: python
+        run: |
+          import os, re, sys
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          src = open("kfc_entra/version.py", encoding="utf-8").read()
+          version = re.search(r'__version__\s*=\s*"([^"]+)"', src).group(1)
+          if tag != version:
+              sys.exit(f"Tag v{tag} does not match __version__ {version!r} - "
+                       "bump kfc_entra/version.py before tagging.")
+          print(f"Tag and __version__ agree: {version}")
+
+      - name: Build exe
+        run: pyinstaller kfc_entra_manager.spec
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KFC-Entra-User-Manager
+          path: dist/KFC Entra User Manager.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/KFC Entra User Manager.exe
+          generate_release_notes: true

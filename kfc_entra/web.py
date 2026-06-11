@@ -39,7 +39,9 @@ from .report import (
     group_by_franchisee,
     parse_report,
 )
+from .updates import get_available_update
 from .users import invite_and_promote, list_users_sorted
+from .version import __version__
 
 # Parsed uploads waiting for the apply step. This app is a single-process
 # local tool, so in-memory is fine; we keep only the most recent few.
@@ -422,6 +424,10 @@ def create_app() -> Flask:
 
     @app.context_processor
     def inject_user():
-        return {"current_user": current_user()}
+        return {
+            "current_user": current_user(),
+            "app_version": __version__,
+            "available_update": get_available_update(),
+        }
 
     return app

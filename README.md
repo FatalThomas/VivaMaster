@@ -103,6 +103,35 @@ opens the app in a native window.
 > work account and gets exactly the access their Entra roles grant. Drop a
 > `.env` next to the exe only to pin `TENANT_ID` or use a custom CLIENT_ID.
 
+### Or let GitHub build it for you
+
+`.github/workflows/build-exe.yml` builds the exe on GitHub's servers:
+
+- **Releases (recommended):** bump `__version__` in `kfc_entra/version.py`,
+  then tag and push:
+
+  ```bash
+  git tag v1.1.0 && git push origin v1.1.0
+  ```
+
+  The workflow builds the exe, verifies the tag matches `version.py`, and
+  publishes a GitHub **Release** with the exe attached. Anyone can download
+  it from the repo's Releases page - no Python required.
+- **One-off build:** run the workflow manually from the **Actions** tab and
+  grab the exe from the run's artifacts.
+
+### Automatic update checks
+
+On launch the app checks GitHub Releases (in the background, at most once a
+day, cached in the per-user config dir) and shows a dismissible banner with
+a download link when a newer version exists. The current version is shown in
+the footer. No network or no access to the repo just means no banner - the
+check never blocks startup.
+
+> If the repo is **private**, the unauthenticated check can't see releases
+> and the banner won't appear. Make the repo (or just its releases) public,
+> or accept manual updates.
+
 ---
 
 ## 5. Architecture

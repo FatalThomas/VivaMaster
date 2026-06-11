@@ -579,3 +579,19 @@ a:hover { text-decoration: underline; }
 [hidden] { display: none !important; }
 
 .btn:disabled { opacity: .55; cursor: not-allowed; }
+
+.update-banner {
+  background: #fff8e1;
+  border-bottom: 1px solid #f0d890;
+  color: var(--ink);
+  padding: 10px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  font-size: 14px;
+}
+.update-banner .update-actions {
+  display: flex;
+  gap: 8px;
+}

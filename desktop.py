@@ -8,6 +8,7 @@ import time
 
 import webview
 
+from kfc_entra.updates import start_background_check
 from kfc_entra.web import create_app
 
 
@@ -33,6 +34,7 @@ def _wait_until_ready(port: int, timeout: float = 8.0) -> bool:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    start_background_check()
     app = create_app()
     port = app.config["KFC_CONFIG"].port
 
