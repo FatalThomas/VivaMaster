@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Sign in - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel device-panel">
+  <h1>Sign in to Microsoft</h1>
+  <p class="muted">
+    Enter the code below at <b>microsoft.com/devicelogin</b>. This window
+    will switch to the dashboard as soon as you've signed in.
+  </p>
+
+  <div class="device-code" id="device-code">{{ info.user_code }}</div>
+
+  <div class="actions device-actions">
+    <button type="button" class="btn btn-primary" id="open-browser-btn">
+      Open Microsoft sign-in
+    </button>
+    <button type="button" class="btn btn-secondary" id="copy-code-btn">
+      Copy code
+    </button>
+  </div>
+
+  <p class="muted device-fallback">
+    Or visit
+    <a href="{{ info.verification_uri }}" target="_blank" rel="noopener">
+      {{ info.verification_uri }}
+    </a>
+    in any browser and enter the code above.
+  </p>
+
+  <div id="auth-status" class="device-status">
+    <span class="spinner" aria-hidden="true"></span>
+    Waiting for sign-in&hellip;
+  </div>
+
+  <p class="muted device-trouble">
+    Sign-in not finishing? <a href="{{ url_for('auth.login') }}">Get a new code</a>
+    or <a href="{{ url_for('main.landing') }}">cancel and go back</a>.
+  </p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var code = {{ info.user_code | tojson }};
+  var verify = {{ info.verification_uri | tojson }};
+  var statusEl = document.getElementById("auth-status");
+
+  function setStatus(text, cls) {
+    statusEl.innerHTML = (cls === "pending" ? '<span class="spinner"></span>' : "") + text;
+    statusEl.className = "device-status device-status-" + (cls || "pending");
+  }
+
+  document.getElementById("copy-code-btn").addEventListener("click", function () {
+    navigator.clipboard.writeText(code)
+      .then(function () { kfcToast("Code copied to clipboard.", "success"); })
+      .catch(function () { kfcToast("Couldn't copy - select the code and copy manually.", "warning"); });
+  });
+
+  document.getElementById("open-browser-btn").addEventListener("click", function () {
+    // Copy the code first so the user can paste it once the browser opens.
+    navigator.clipboard.writeText(code).catch(function () {});
+    fetch({{ url_for('auth.login_open_browser') | tojson }}, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      credentials: "same-origin",
+      body: JSON.stringify({url: verify}),
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.opened) {
+        kfcToast("Browser opened. Paste the code (already on your clipboard).", "success");
+      } else {
+        kfcToast("Couldn't open your browser - visit " + verify + " manually.", "warning");
+      }
+    })
+    .catch(function () {
+      kfcToast("Couldn't open your browser - visit " + verify + " manually.", "warning");
+    });
+  });
+
+  function poll() {
+    fetch({{ url_for('auth.login_status') | tojson }}, {credentials: "same-origin"})
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.status === "success") {
+          setStatus("Signed in. Loading the dashboard…", "success");
+          window.location.href = {{ url_for('main.dashboard') | tojson }};
+        } else if (data.status === "pending") {
+          setTimeout(poll, 2500);
+        } else if (data.status === "expired") {
+          setStatus("Code expired. <a href=\"" + {{ url_for('auth.login') | tojson }} + "\">Get a new one</a>.", "error");
+        } else {
+          setStatus("Sign-in failed: " + (data.error || "unknown error") +
+                    " <a href=\"" + {{ url_for('auth.login') | tojson }} + "\">Try again</a>.", "error");
+        }
+      })
+      .catch(function () { setTimeout(poll, 5000); });
+  }
+  setTimeout(poll, 2500);
+})();
+</script>
+{% endblock %}

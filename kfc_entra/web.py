@@ -25,10 +25,11 @@ from config import load_config
 from .auth import (
     clear_session,
     current_user,
-    finish_auth_flow,
     get_access_token,
     login_required,
-    start_auth_flow,
+    open_in_system_browser,
+    poll_device_flow,
+    start_device_flow,
 )
 from .bulk import iter_apply_mappings, iter_convert_to_member
 from .graph_client import GraphClient, GraphError
@@ -91,20 +92,37 @@ main_bp = Blueprint("main", __name__)
 # ---------- auth routes ----------
 @auth_bp.route("/login")
 def login():
-    return redirect(start_auth_flow())
+    """Render the device-code sign-in page.
+
+    Already-signed-in users skip straight to the dashboard so they can't
+    accidentally start a second device flow on top of a valid session.
+    """
+    if current_user() and get_access_token():
+        return redirect(url_for("main.dashboard"))
+    try:
+        info = start_device_flow()
+    except RuntimeError as exc:
+        flash(f"Could not start sign-in: {exc}", "error")
+        return redirect(url_for("main.landing"))
+    return render_template("device_login.html", info=info)
 
 
-@auth_bp.route("/auth/callback")
-def auth_callback():
-    result = finish_auth_flow(request.args.to_dict())
-    if "error" in result:
-        flash(
-            f"Sign-in failed: {result.get('error_description') or result.get('error')}",
-            "error",
-        )
-        return redirect(url_for("auth.login"))
-    next_url = session.pop("post_login_redirect", None) or url_for("main.dashboard")
-    return redirect(next_url)
+@auth_bp.route("/login/status")
+def login_status():
+    """Polled by the device-code page until sign-in completes."""
+    return jsonify(poll_device_flow())
+
+
+@auth_bp.route("/login/open-browser", methods=["POST"])
+def login_open_browser():
+    """Open the Microsoft devicelogin page in the user's default browser.
+
+    Restricted to known Microsoft hosts in auth.py so a stray local
+    request can't launch arbitrary URLs.
+    """
+    payload = request.get_json(silent=True) or {}
+    opened = open_in_system_browser(payload.get("url", ""))
+    return jsonify({"opened": opened})
 
 
 @auth_bp.route("/logout")
@@ -116,10 +134,6 @@ def logout():
 # ---------- main routes ----------
 @main_bp.route("/")
 def landing():
-    # The OAuth redirect lands here: loopback redirect URIs for the
-    # pre-consented first-party client must use the root path.
-    if "code" in request.args and "state" in request.args:
-        return auth_callback()
     if current_user() and get_access_token():
         return redirect(url_for("main.dashboard"))
     return render_template("login.html")

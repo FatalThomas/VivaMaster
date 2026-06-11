@@ -595,3 +595,57 @@ a:hover { text-decoration: underline; }
   display: flex;
   gap: 8px;
 }
+
+/* ===================== device-code sign-in ===================== */
+.device-panel {
+  max-width: 560px;
+  margin: 0 auto;
+  text-align: center;
+}
+.device-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  padding: 22px 16px;
+  margin: 24px auto;
+  background: var(--bg);
+  border: 2px dashed var(--kfc-red);
+  border-radius: 12px;
+  color: var(--kfc-red);
+  user-select: all;
+}
+.device-actions {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.device-fallback {
+  margin-top: 24px;
+  font-size: 13px;
+}
+.device-status {
+  margin-top: 24px;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.device-status-success { background: #d6f5e0; color: var(--ok); }
+.device-status-error   { background: #fbe6e2; color: var(--err); }
+.device-trouble {
+  margin-top: 20px;
+  font-size: 12px;
+}
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line);
+  border-top-color: var(--kfc-red);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

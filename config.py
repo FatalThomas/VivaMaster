@@ -1,11 +1,12 @@
 """Configuration loader. Reads from environment variables (and `.env` if present).
 
 Zero-config by default: the app signs in as the user via Microsoft's
-pre-consented first-party "Microsoft Azure CLI" public client, requesting
-Directory.AccessAsUser.All. That scope means the app can only ever do what
-the signed-in user's own Entra roles allow - no app registration and no
-tenant-wide admin consent required. Set CLIENT_ID/TENANT_ID to use your own
-app registration instead.
+pre-consented first-party "Microsoft Azure CLI" public client with the
+OAuth 2.0 device code flow. The user types a short code into
+microsoft.com/devicelogin - no redirect URIs, no app registration, no
+admin consent. Effective access is whatever the signed-in user's own
+Entra roles allow. Set CLIENT_ID/TENANT_ID to use your own app
+registration instead.
 """
 from __future__ import annotations
 
@@ -35,14 +36,6 @@ class Config:
     @property
     def authority(self) -> str:
         return f"https://login.microsoftonline.com/{self.tenant_id}"
-
-    @property
-    def redirect_uri(self) -> str:
-        # Loopback redirect at the root path. Azure AD ignores the port for
-        # localhost redirects, so this matches the first-party client's
-        # registered "http://localhost" URI. Custom app registrations must
-        # register http://localhost:<PORT> (path "/").
-        return f"http://localhost:{self.port}"
 
     @property
     def scopes(self) -> list[str]:
