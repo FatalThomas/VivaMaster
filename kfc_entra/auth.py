@@ -5,15 +5,19 @@ signed-in admin sees a short code, types it into microsoft.com/devicelogin
 (in their default browser, which we offer to open for them), and we
 background-poll MSAL for the resulting tokens.
 
-Pending flows live in an in-process dict, keyed by a UUID we put in the
-Flask session. The app only listens on 127.0.0.1, the dict only holds
-short-lived flow state, and each entry expires after 15 minutes.
+The Flask session cookie is kept deliberately tiny - it holds a session
+UUID (`sid`) and, while a sign-in is in progress, a device-flow UUID. The
+MSAL token cache and the user identity claims live in an in-process dict
+keyed by `sid`. That dodges Flask's signed-cookie size limit and the
+WebView2 quirk where a Set-Cookie from a fetch response sometimes isn't
+visible to the next top-level navigation.
 """
 from __future__ import annotations
 
 import threading
 import time
 import webbrowser
+from dataclasses import dataclass, field
 from functools import wraps
 from typing import Callable
 from urllib.parse import urlparse
@@ -32,20 +36,47 @@ _BROWSER_OPEN_ALLOWLIST = frozenset(
     }
 )
 
-# Pending device flows: {flow_id: {"flow", "started", "result", "cache"}}.
+# Pending device flows: {flow_id: {"flow", "started", "result"}}.
 _PENDING: dict[str, dict] = {}
-_LOCK = threading.Lock()
-_TTL_SECONDS = 15 * 60
+_PENDING_LOCK = threading.Lock()
+_PENDING_TTL = 15 * 60
 
 
-def _build_msal_app(cache: msal.SerializableTokenCache | None = None) -> msal.PublicClientApplication:
-    cfg = current_app.config["KFC_CONFIG"]
-    return msal.PublicClientApplication(cfg.client_id, authority=cfg.authority, token_cache=cache)
+@dataclass
+class _SessionState:
+    cache: msal.SerializableTokenCache = field(default_factory=msal.SerializableTokenCache)
+    user: dict | None = None
+
+
+# Per-Flask-session state, keyed by the `sid` we put in the session cookie.
+_SESSIONS: dict[str, _SessionState] = {}
+_SESSIONS_LOCK = threading.Lock()
+
+
+# ---------- internal helpers ----------
+
+def _ensure_sid() -> str:
+    """Return the session's stable id, creating one on first access."""
+    sid = session.get("sid")
+    if not sid:
+        sid = uuid4().hex
+        session["sid"] = sid
+        session.permanent = True
+    return sid
+
+
+def _state_for(sid: str) -> _SessionState:
+    with _SESSIONS_LOCK:
+        state = _SESSIONS.get(sid)
+        if state is None:
+            state = _SessionState()
+            _SESSIONS[sid] = state
+        return state
 
 
 def _purge_expired_unlocked() -> None:
     now = time.time()
-    for k in [k for k, v in _PENDING.items() if now - v["started"] > _TTL_SECONDS]:
+    for k in [k for k, v in _PENDING.items() if now - v["started"] > _PENDING_TTL]:
         _PENDING.pop(k, None)
 
 
@@ -56,37 +87,46 @@ def _flow_info(flow_id: str, flow: dict) -> dict:
         "flow_id": flow_id,
         "user_code": user_code,
         "verification_uri": verification_uri,
-        # Microsoft accepts ?otc=CODE on the devicelogin page to pre-fill the
-        # code, so the user just signs in - no copy/paste required.
+        # Microsoft accepts ?otc=CODE on the devicelogin page to pre-fill
+        # the code, so the user just signs in - no copy/paste required.
         "verification_uri_complete": f"{verification_uri}?otc={user_code}",
         "message": flow.get("message", ""),
         "expires_in": flow.get("expires_in", 900),
     }
 
 
+def _build_msal_app(cache: msal.SerializableTokenCache) -> msal.PublicClientApplication:
+    cfg = current_app.config["KFC_CONFIG"]
+    return msal.PublicClientApplication(cfg.client_id, authority=cfg.authority, token_cache=cache)
+
+
+# ---------- public API ----------
+
 def start_device_flow() -> dict:
     """Initiate device flow and spawn the background MSAL poller.
 
-    Idempotent: if the session already has a pending (not yet completed)
-    device flow with plenty of time left, that flow's code is reused
-    instead of starting a new one. This way re-hitting /login - whether
-    from a button, a refresh, or pywebview navigating away and back -
-    never silently invalidates the code the user just pasted into
-    Microsoft.
+    Idempotent: if the session already has a pending device flow with
+    time left on the clock, that flow's code is reused instead of
+    starting a new one. The worker uses the *same* per-session token
+    cache that get_access_token() reads later, so a successful sign-in
+    is immediately visible to subsequent requests.
     """
     cfg = current_app.config["KFC_CONFIG"]
 
     existing_id = session.get("device_flow_id")
     if existing_id:
-        with _LOCK:
+        with _PENDING_LOCK:
             entry = _PENDING.get(existing_id)
             if entry is not None and entry["result"] is None:
                 age = time.time() - entry["started"]
-                # Keep a 60s buffer so we don't hand back a code about to expire.
-                if age < _TTL_SECONDS - 60:
+                # Keep a 60s buffer so we never hand back a code about to expire.
+                if age < _PENDING_TTL - 60:
                     return _flow_info(existing_id, entry["flow"])
 
-    msal_app = _build_msal_app()
+    sid = _ensure_sid()
+    shared_cache = _state_for(sid).cache
+
+    msal_app = _build_msal_app(shared_cache)
     flow = msal_app.initiate_device_flow(scopes=cfg.scopes)
     if "user_code" not in flow:
         raise RuntimeError(
@@ -94,31 +134,25 @@ def start_device_flow() -> dict:
         )
 
     flow_id = uuid4().hex
-    client_id, authority, scopes = cfg.client_id, cfg.authority, list(cfg.scopes)
+    client_id, authority = cfg.client_id, cfg.authority
 
     def worker(flow_copy: dict) -> None:
-        # MSAL's acquire_token_by_device_flow blocks until success, expiry,
-        # or user denial. We let it block on this background thread.
-        cache = msal.SerializableTokenCache()
-        local = msal.PublicClientApplication(client_id, authority=authority, token_cache=cache)
+        # Block on the same per-session cache so refresh tokens land
+        # where get_access_token() will read them - no serialization
+        # round-trip through the cookie.
+        local = msal.PublicClientApplication(client_id, authority=authority, token_cache=shared_cache)
         try:
             result = local.acquire_token_by_device_flow(flow_copy)
         except Exception as exc:  # network glitch, etc.
             result = {"error": "worker_failed", "error_description": str(exc)}
-        with _LOCK:
+        with _PENDING_LOCK:
             entry = _PENDING.get(flow_id)
             if entry is not None:
                 entry["result"] = result
-                entry["cache"] = cache.serialize() if cache.has_state_changed else None
 
-    with _LOCK:
+    with _PENDING_LOCK:
         _purge_expired_unlocked()
-        _PENDING[flow_id] = {
-            "flow": flow,
-            "started": time.time(),
-            "result": None,
-            "cache": None,
-        }
+        _PENDING[flow_id] = {"flow": flow, "started": time.time(), "result": None}
     threading.Thread(
         target=worker,
         args=(dict(flow),),
@@ -139,28 +173,33 @@ def poll_device_flow() -> dict:
     flow_id = session.get("device_flow_id")
     if not flow_id:
         return {"status": "expired"}
-    with _LOCK:
+    with _PENDING_LOCK:
         entry = _PENDING.get(flow_id)
         result = entry["result"] if entry else None
-        cache_blob = entry["cache"] if entry else None
 
     if entry is None:
         return {"status": "expired"}
     if result is None:
         return {"status": "pending"}
 
-    # Result available - persist tokens into the Flask session and clean up.
     if "access_token" in result:
-        if cache_blob:
-            session["token_cache"] = cache_blob
-        session["user"] = result.get("id_token_claims", {})
-        with _LOCK:
+        # Token cache was already updated by the worker (shared object);
+        # we just need to record who's signed in so current_user() works.
+        sid = _ensure_sid()
+        state = _state_for(sid)
+        claims = result.get("id_token_claims") or {}
+        state.user = {
+            "name": claims.get("name") or claims.get("preferred_username") or "Signed-in user",
+            "preferred_username": claims.get("preferred_username"),
+            "oid": claims.get("oid"),
+        }
+        with _PENDING_LOCK:
             _PENDING.pop(flow_id, None)
         session.pop("device_flow_id", None)
         return {"status": "success"}
 
     err = result.get("error_description") or result.get("error") or "Sign-in failed."
-    with _LOCK:
+    with _PENDING_LOCK:
         _PENDING.pop(flow_id, None)
     session.pop("device_flow_id", None)
     return {"status": "error", "error": err}
@@ -183,32 +222,43 @@ def open_in_system_browser(url: str) -> bool:
 
 def get_access_token() -> str | None:
     """Return a valid Graph access token, refreshing silently if possible."""
-    cache = msal.SerializableTokenCache()
-    raw = session.get("token_cache")
-    if raw:
-        cache.deserialize(raw)
-    msal_app = _build_msal_app(cache)
+    sid = session.get("sid")
+    if not sid:
+        return None
+    with _SESSIONS_LOCK:
+        state = _SESSIONS.get(sid)
+    if state is None or state.user is None:
+        return None
+
+    msal_app = _build_msal_app(state.cache)
     accounts = msal_app.get_accounts()
     if not accounts:
         return None
     cfg = current_app.config["KFC_CONFIG"]
     result = msal_app.acquire_token_silent(cfg.scopes, account=accounts[0])
-    if cache.has_state_changed:
-        session["token_cache"] = cache.serialize()
     if result and "access_token" in result:
         return result["access_token"]
     return None
 
 
 def current_user() -> dict | None:
-    return session.get("user")
+    sid = session.get("sid")
+    if not sid:
+        return None
+    with _SESSIONS_LOCK:
+        state = _SESSIONS.get(sid)
+    return state.user if state else None
 
 
 def clear_session() -> None:
+    sid = session.get("sid")
     flow_id = session.get("device_flow_id")
     session.clear()
+    if sid:
+        with _SESSIONS_LOCK:
+            _SESSIONS.pop(sid, None)
     if flow_id:
-        with _LOCK:
+        with _PENDING_LOCK:
             _PENDING.pop(flow_id, None)
 
 
