@@ -120,13 +120,33 @@ opens the app in a native window.
 - **One-off build:** run the workflow manually from the **Actions** tab and
   grab the exe from the run's artifacts.
 
-### Automatic update checks
+### Automatic updates
 
 On launch the app checks GitHub Releases (in the background, at most once a
-day, cached in the per-user config dir) and shows a dismissible banner with
-a download link when a newer version exists. The current version is shown in
-the footer. No network or no access to the repo just means no banner - the
-check never blocks startup.
+day, cached in the per-user config dir) and shows a dismissible banner when
+a newer version exists. The current version is shown in the footer. No
+network or no access to the repo just means no banner - the check never
+blocks startup.
+
+When running as the packaged exe, the banner has an **Update now** button
+that does the whole swap in one click:
+
+1. Downloads the new exe from the GitHub release over HTTPS into the
+   per-user config dir (size-verified against Content-Length; a dropped
+   connection can never half-install).
+2. Spawns a tiny replacer script, then exits. The script waits for the old
+   exe's file lock to clear, copies the new exe over it in place, relaunches
+   it, and deletes itself.
+3. The app reopens by itself on the new version. Same path, same shortcuts,
+   same pinned taskbar icon.
+
+If the copy keeps failing (e.g. the exe lives somewhere the user can't
+write, like Program Files), the replacer gives up after ~60 seconds and the
+old version simply stays - nothing breaks. Running from source shows a
+download link instead of the button.
+
+> Worth doing eventually: sign the exe with a code-signing certificate so
+> SmartScreen doesn't warn on first run of each new version.
 
 > If the repo is **private**, the unauthenticated check can't see releases
 > and the banner won't appear. Make the repo (or just its releases) public,

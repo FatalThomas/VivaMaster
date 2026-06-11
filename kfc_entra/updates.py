@@ -11,9 +11,15 @@ startup delay.
 from __future__ import annotations
 
 import json
+import os
+import platform
+import subprocess
+import sys
+import tempfile
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 
@@ -151,3 +157,92 @@ def get_available_update() -> UpdateInfo | None:
     """The update found by the background check, or None."""
     with _lock:
         return _available
+
+
+# ---------- one-click self-update (Windows exe builds only) ----------
+
+# A running exe can't overwrite itself on Windows, so the swap happens in a
+# tiny batch script: it retries the copy until the old process has exited
+# and released the file lock, then relaunches the updated exe and deletes
+# itself. `ping -n 2` is the portable one-second sleep for batch files.
+_UPDATER_BAT = """@echo off
+set /a tries=60
+:loop
+copy /y "{new_exe}" "{target_exe}" >NUL 2>&1
+if not errorlevel 1 goto done
+set /a tries-=1
+if %tries% leq 0 exit /b 1
+ping -n 2 127.0.0.1 >NUL
+goto loop
+:done
+start "" "{target_exe}"
+del "{new_exe}" >NUL 2>&1
+del "%~f0"
+"""
+
+
+def is_frozen() -> bool:
+    """True when running as a PyInstaller-built exe."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def self_install_supported() -> bool:
+    return is_frozen() and platform.system() == "Windows"
+
+
+def download_update(info: UpdateInfo) -> Path:
+    """Download the release exe into the per-user config dir.
+
+    Downloads to a .partial file first and verifies the byte count against
+    Content-Length before moving it into place, so a dropped connection can
+    never leave a truncated exe where the updater would pick it up.
+    """
+    if not info.exe_download_url:
+        raise RuntimeError("This release has no exe attached.")
+    updates_dir = config_dir() / "updates"
+    updates_dir.mkdir(parents=True, exist_ok=True)
+    target = updates_dir / f"KFC Entra User Manager-{info.latest_version}.exe"
+    partial = target.with_suffix(".partial")
+
+    with requests.get(
+        info.exe_download_url, stream=True, timeout=(10, 30), allow_redirects=True
+    ) as resp:
+        resp.raise_for_status()
+        expected = int(resp.headers.get("Content-Length") or 0)
+        written = 0
+        with open(partial, "wb") as fh:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                fh.write(chunk)
+                written += len(chunk)
+
+    if expected and written != expected:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Download incomplete ({written} of {expected} bytes) - try again."
+        )
+    os.replace(partial, target)
+    return target
+
+
+def install_update_and_restart(new_exe: Path) -> None:
+    """Spawn the replacer script, then exit so it can take over.
+
+    The HTTP response telling the UI "restarting" needs a moment to flush
+    before the process dies, hence the delayed os._exit.
+    """
+    target_exe = Path(sys.executable)
+    script = _UPDATER_BAT.format(new_exe=new_exe, target_exe=target_exe)
+    fd, bat_path = tempfile.mkstemp(suffix=".bat", prefix="kfc_update_")
+    with os.fdopen(fd, "w", encoding="ascii") as fh:
+        fh.write(script)
+
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+        subprocess, "CREATE_NO_WINDOW", 0
+    )
+    subprocess.Popen(
+        ["cmd.exe", "/c", bat_path],
+        creationflags=flags,
+        close_fds=True,
+        cwd=tempfile.gettempdir(),
+    )
+    threading.Timer(1.0, os._exit, args=(0,)).start()

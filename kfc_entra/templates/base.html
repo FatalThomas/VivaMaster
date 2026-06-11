@@ -34,10 +34,16 @@
     (you're on {{ app_version }}).
   </span>
   <span class="update-actions">
-    <a class="btn btn-tiny btn-primary" target="_blank" rel="noopener"
-       href="{{ available_update.exe_download_url or available_update.release_url }}">
-      {{ 'Download update' if available_update.exe_download_url else 'View release' }}
-    </a>
+    {% if self_install_supported and available_update.exe_download_url %}
+      <button type="button" class="btn btn-tiny btn-primary" id="update-install">
+        Update now
+      </button>
+    {% else %}
+      <a class="btn btn-tiny btn-primary" target="_blank" rel="noopener"
+         href="{{ available_update.exe_download_url or available_update.release_url }}">
+        {{ 'Download update' if available_update.exe_download_url else 'View release' }}
+      </a>
+    {% endif %}
     <button type="button" class="btn btn-tiny" id="update-dismiss">Dismiss</button>
   </span>
 </div>
@@ -50,6 +56,30 @@
     localStorage.setItem(key, "1");
     banner.hidden = true;
   });
+
+  var installBtn = document.getElementById("update-install");
+  if (installBtn) {
+    installBtn.addEventListener("click", function () {
+      installBtn.disabled = true;
+      installBtn.textContent = "Downloading update…";
+      fetch("{{ url_for('main.install_update') }}", {
+        method: "POST",
+        credentials: "same-origin",
+      })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.data.error || "Update failed.");
+        banner.classList.add("update-restarting");
+        banner.innerHTML = "<span>Update downloaded – restarting as version <b>" +
+          res.data.version + "</b>… this window will close; the app reopens by itself.</span>";
+      })
+      .catch(function (err) {
+        installBtn.disabled = false;
+        installBtn.textContent = "Update now";
+        if (window.kfcToast) kfcToast(err.message, "error"); else alert(err.message);
+      });
+    });
+  }
 })();
 </script>
 {% endif %}

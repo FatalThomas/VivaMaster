@@ -39,7 +39,12 @@ from .report import (
     group_by_franchisee,
     parse_report,
 )
-from .updates import get_available_update
+from .updates import (
+    download_update,
+    get_available_update,
+    install_update_and_restart,
+    self_install_supported,
+)
 from .users import invite_and_promote, list_users_sorted
 from .version import __version__
 
@@ -226,6 +231,33 @@ def update_display_name(user_id: str):
     except GraphError as exc:
         flash(f"Failed to update display name: {exc.message}", "error")
     return redirect(url_for("main.users_list"))
+
+
+# ---------- self-update ----------
+# No @login_required: this touches the local exe, not Microsoft Graph, and
+# must work from the sign-in page too. The app only listens on 127.0.0.1.
+@main_bp.route("/updates/install", methods=["POST"])
+def install_update():
+    info = get_available_update()
+    if not info:
+        return jsonify({"error": "No update available."}), 400
+    if not self_install_supported():
+        return (
+            jsonify(
+                {
+                    "error": "Self-update only works in the packaged exe. "
+                    "Running from source? Use git pull instead.",
+                    "release_url": info.release_url,
+                }
+            ),
+            400,
+        )
+    try:
+        new_exe = download_update(info)
+    except Exception as exc:  # surface download errors verbatim to the UI
+        return jsonify({"error": str(exc)}), 502
+    install_update_and_restart(new_exe)
+    return jsonify({"status": "restarting", "version": info.latest_version})
 
 
 # ---------- bulk convert (SSE) ----------
@@ -428,6 +460,7 @@ def create_app() -> Flask:
             "current_user": current_user(),
             "app_version": __version__,
             "available_update": get_available_update(),
+            "self_install_supported": self_install_supported(),
         }
 
     return app
