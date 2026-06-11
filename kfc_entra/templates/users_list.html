@@ -4,7 +4,11 @@
 <section class="panel">
   <div class="panel-head">
     <h1>Users</h1>
-    <a class="btn btn-primary" href="{{ url_for('main.add_user') }}">+ Add user</a>
+    <div class="panel-head-actions">
+      <a class="btn btn-secondary" href="{{ url_for('main.users_list', q=search or None, type=type_filter or None) }}"
+         title="Re-fetch the user list from Microsoft Graph">&#x21bb; Refresh</a>
+      <a class="btn btn-primary" href="{{ url_for('main.add_user') }}">+ Add user</a>
+    </div>
   </div>
 
   <form method="get" class="searchbar">

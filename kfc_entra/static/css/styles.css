@@ -110,6 +110,7 @@ a:hover { text-decoration: underline; }
   margin-bottom: 16px;
 }
 .panel-head h1 { margin: 0; }
+.panel-head-actions { display: flex; gap: 8px; align-items: center; }
 
 .muted { color: var(--muted); }
 
