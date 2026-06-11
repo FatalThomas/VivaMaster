@@ -13,6 +13,86 @@
       <h2>Browse users</h2>
       <p>Search, edit display names, or promote existing Guests to Members.</p>
     </a>
+    <a class="card" href="{{ url_for('main.report_upload_page') }}">
+      <h2>Upload employee report</h2>
+      <p>Bulk-add colleagues to Entra groups by Franchisee from a CSV / Excel employee report.</p>
+    </a>
   </div>
 </section>
+
+<section class="panel" style="margin-top: 20px;">
+  <h1>Bulk convert</h1>
+  <p class="muted">
+    Flip user types in one go. Both actions are idempotent &ndash; users already
+    set to Member are left untouched, so re-running is always safe.
+  </p>
+  <div class="bulk-actions-row">
+    <button type="button" class="btn btn-primary" id="convert-guests-btn"
+            data-scope="guests">Convert all Guests to Members</button>
+    <button type="button" class="btn btn-secondary" id="convert-all-btn"
+            data-scope="all">Set everyone to Member</button>
+  </div>
+  <div class="bulk-panel" id="dash-bulk-panel" hidden></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var panel = document.getElementById("dash-bulk-panel");
+  var buttons = [
+    document.getElementById("convert-guests-btn"),
+    document.getElementById("convert-all-btn"),
+  ];
+
+  function startConvert(button) {
+    var scope = button.dataset.scope;
+    buttons.forEach(function (b) { kfcBusy(b, true); });
+    fetch("{{ url_for('main.convert_confirm') }}", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ scope: scope }),
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.error) throw new Error(data.error);
+      if (data.count === 0) {
+        kfcToast(scope === "guests" ? "No Guests found - everyone is already a Member."
+                                    : "Everyone is already a Member.", "success");
+        buttons.forEach(function (b) { kfcBusy(b, false); });
+        return;
+      }
+      var noun = scope === "guests" ? "Guest user(s)" : "non-Member user(s)";
+      var proceed = data.count > 5
+        ? kfcConfirm({
+            title: "Convert " + data.count + " users?",
+            bodyHtml: "About to convert <b>" + data.count + "</b> " + noun +
+                      " to <b>userType: Member</b>. This runs against your live Entra tenant.",
+            confirmLabel: "Convert " + data.count + " users",
+          })
+        : Promise.resolve(confirm("Convert " + data.count + " " + noun + " to Member?"));
+      return proceed.then(function (ok) {
+        if (!ok) { buttons.forEach(function (b) { kfcBusy(b, false); }); return; }
+        return kfcRunBulk({
+          url: "{{ url_for('main.convert_stream') }}?scope=" + scope,
+          method: "GET",
+          panel: panel,
+          verb: "Converting",
+          failuresCsvName: "convert-failures.csv",
+          onDone: function () { buttons.forEach(function (b) { kfcBusy(b, false); }); },
+        });
+      });
+    })
+    .catch(function (err) {
+      kfcToast(err.message, "error");
+      buttons.forEach(function (b) { kfcBusy(b, false); });
+    });
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () { startConvert(b); });
+  });
+})();
+</script>
 {% endblock %}

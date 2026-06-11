@@ -8,17 +8,37 @@
   </div>
 
   <form method="get" class="searchbar">
+    <input type="hidden" name="type" value="{{ type_filter or 'all' }}">
     <input type="search" name="q" value="{{ search }}" placeholder="Search by name, email, or UPN">
     <button type="submit" class="btn btn-secondary">Search</button>
     {% if search %}
-      <a class="btn btn-link" href="{{ url_for('main.users_list') }}">Clear</a>
+      <a class="btn btn-link" href="{{ url_for('main.users_list', type=type_filter) }}">Clear</a>
     {% endif %}
   </form>
 
+  <div class="chips">
+    <a class="chip {{ 'chip-active' if type_filter == 'all' else '' }}"
+       href="{{ url_for('main.users_list', q=search or None) }}">All</a>
+    <a class="chip {{ 'chip-active' if type_filter == 'members' else '' }}"
+       href="{{ url_for('main.users_list', type='members', q=search or None) }}">Members only</a>
+    <a class="chip {{ 'chip-active' if type_filter == 'guests' else '' }}"
+       href="{{ url_for('main.users_list', type='guests', q=search or None) }}">Guests only</a>
+  </div>
+
+  <div class="bulk-actions-row">
+    <button type="button" class="btn btn-primary" id="convert-guests-btn"
+            data-scope="guests">Convert all Guests to Members</button>
+    <button type="button" class="btn btn-secondary" id="convert-all-btn"
+            data-scope="all">Set everyone to Member</button>
+  </div>
+
+  <div class="bulk-panel" id="users-bulk-panel" hidden></div>
+
   {% if users %}
-  <table class="users-table">
+  <table class="users-table" id="users-table">
     <thead>
       <tr>
+        <th class="select-col"><input type="checkbox" id="select-all" title="Select all"></th>
         <th>Display name</th>
         <th>UPN / Email</th>
         <th>Type</th>
@@ -29,6 +49,11 @@
     <tbody>
       {% for u in users %}
       <tr>
+        <td class="select-col">
+          <input type="checkbox" class="row-select" value="{{ u.id }}"
+                 data-label="{{ u.mail or u.user_principal_name }}"
+                 {% if u.user_type == 'Member' %}data-member="1"{% endif %}>
+        </td>
         <td>
           <form method="post" action="{{ url_for('main.update_display_name', user_id=u.id) }}" class="inline-edit">
             <input type="text" name="display_name" value="{{ u.display_name }}">
@@ -57,8 +82,161 @@
       {% endfor %}
     </tbody>
   </table>
+
+  <div class="sticky-bar" id="selection-bar" hidden>
+    <span class="count" id="selection-count">0 selected</span>
+    <div>
+      <button type="button" class="btn btn-link" id="selection-clear">Clear</button>
+      <button type="button" class="btn btn-primary" id="selection-convert">Convert to Member</button>
+    </div>
+  </div>
   {% else %}
-    <p class="empty">No users found{% if search %} matching "{{ search }}"{% endif %}.</p>
+    <div class="empty-state">
+      <div class="art">&#128269;</div>
+      <h2>No users found</h2>
+      {% if search %}
+        <p>Nothing matches &ldquo;{{ search }}&rdquo;{% if type_filter != 'all' %} in the <b>{{ type_filter }}</b> filter{% endif %}. Try a different search or clear the filters.</p>
+        <a class="btn btn-secondary" href="{{ url_for('main.users_list') }}">Clear search &amp; filters</a>
+      {% elif type_filter == 'guests' %}
+        <p>No Guest accounts here &ndash; everyone has already been converted to Member. Nice.</p>
+        <a class="btn btn-secondary" href="{{ url_for('main.users_list') }}">Show all users</a>
+      {% else %}
+        <p>This tenant has no visible users yet. Invite your first colleague to get started.</p>
+        <a class="btn btn-primary" href="{{ url_for('main.add_user') }}">+ Add user</a>
+      {% endif %}
+    </div>
   {% endif %}
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var panel = document.getElementById("users-bulk-panel");
+  var convertButtons = [
+    document.getElementById("convert-guests-btn"),
+    document.getElementById("convert-all-btn"),
+  ];
+  var selectionBar = document.getElementById("selection-bar");
+  var selectionCount = document.getElementById("selection-count");
+  var selectAll = document.getElementById("select-all");
+  var rowChecks = Array.prototype.slice.call(document.querySelectorAll(".row-select"));
+
+  function allBusy(busy) {
+    convertButtons.forEach(function (b) { kfcBusy(b, busy); });
+    var sel = document.getElementById("selection-convert");
+    if (sel) kfcBusy(sel, busy);
+  }
+
+  /* ---- scope-based bulk convert (guests / all) ---- */
+  function startConvert(scope) {
+    allBusy(true);
+    fetch("{{ url_for('main.convert_confirm') }}", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ scope: scope }),
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.error) throw new Error(data.error);
+      if (data.count === 0) {
+        kfcToast(scope === "guests" ? "No Guests found - everyone is already a Member."
+                                    : "Everyone is already a Member.", "success");
+        allBusy(false);
+        return;
+      }
+      var noun = scope === "guests" ? "Guest user(s)" : "non-Member user(s)";
+      var proceed = data.count > 5
+        ? kfcConfirm({
+            title: "Convert " + data.count + " users?",
+            bodyHtml: "About to convert <b>" + data.count + "</b> " + noun +
+                      " to <b>userType: Member</b>. This runs against your live Entra tenant.",
+            confirmLabel: "Convert " + data.count + " users",
+          })
+        : Promise.resolve(confirm("Convert " + data.count + " " + noun + " to Member?"));
+      return proceed.then(function (ok) {
+        if (!ok) { allBusy(false); return; }
+        return kfcRunBulk({
+          url: "{{ url_for('main.convert_stream') }}?scope=" + scope,
+          method: "GET",
+          panel: panel,
+          verb: "Converting",
+          failuresCsvName: "convert-failures.csv",
+          onDone: function (summary) {
+            allBusy(false);
+            if (summary && summary.succeeded > 0) {
+              setTimeout(function () { window.location.reload(); }, 2500);
+            }
+          },
+        });
+      });
+    })
+    .catch(function (err) { kfcToast(err.message, "error"); allBusy(false); });
+  }
+
+  convertButtons.forEach(function (b) {
+    b.addEventListener("click", function () { startConvert(b.dataset.scope); });
+  });
+
+  /* ---- row selection + sticky bar ---- */
+  function selectedIds() {
+    return rowChecks.filter(function (c) { return c.checked; })
+                    .map(function (c) { return c.value; });
+  }
+  function refreshBar() {
+    var n = selectedIds().length;
+    selectionBar.hidden = n === 0;
+    selectionCount.textContent = n + " selected";
+    if (selectAll) {
+      selectAll.checked = n > 0 && n === rowChecks.length;
+      selectAll.indeterminate = n > 0 && n < rowChecks.length;
+    }
+  }
+  rowChecks.forEach(function (c) { c.addEventListener("change", refreshBar); });
+  if (selectAll) {
+    selectAll.addEventListener("change", function () {
+      rowChecks.forEach(function (c) { c.checked = selectAll.checked; });
+      refreshBar();
+    });
+  }
+  var clearBtn = document.getElementById("selection-clear");
+  if (clearBtn) clearBtn.addEventListener("click", function () {
+    rowChecks.forEach(function (c) { c.checked = false; });
+    refreshBar();
+  });
+
+  var convertSelected = document.getElementById("selection-convert");
+  if (convertSelected) convertSelected.addEventListener("click", function () {
+    var ids = selectedIds();
+    if (!ids.length) return;
+    var proceed = ids.length > 5
+      ? kfcConfirm({
+          title: "Convert " + ids.length + " selected users?",
+          bodyHtml: "About to set <b>" + ids.length + "</b> selected user(s) to " +
+                    "<b>userType: Member</b>. Users already set to Member are skipped.",
+          confirmLabel: "Convert " + ids.length + " users",
+        })
+      : Promise.resolve(confirm("Convert " + ids.length + " selected user(s) to Member?"));
+    proceed.then(function (ok) {
+      if (!ok) return;
+      allBusy(true);
+      kfcRunBulk({
+        url: "{{ url_for('main.convert_stream') }}",
+        method: "POST",
+        body: { user_ids: ids },
+        panel: panel,
+        verb: "Converting",
+        failuresCsvName: "convert-failures.csv",
+        onDone: function (summary) {
+          allBusy(false);
+          if (summary && summary.succeeded > 0) {
+            setTimeout(function () { window.location.reload(); }, 2500);
+          }
+        },
+      });
+    });
+  });
+})();
+</script>
 {% endblock %}

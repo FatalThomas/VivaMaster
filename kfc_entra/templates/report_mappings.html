@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Franchisee mappings - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Franchisee &rarr; Group mappings</h1>
+    <a class="btn btn-secondary" href="{{ url_for('main.report_upload_page') }}">Upload a report</a>
+  </div>
+  <p class="muted">
+    Saved on this machine and offered as the default whenever you upload an
+    employee report. Pick an existing Entra group, or type a new name and the
+    group will be created when you save.
+  </p>
+  {% if groups_error %}
+    <div class="flash flash-warning">
+      Could not load Entra groups for the picker: {{ groups_error }}.
+      You can still type a group name to create it.
+    </div>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('main.report_mappings_save') }}" class="mapping-form" id="mapping-form">
+    <label class="field">
+      <span>Franchisee code</span>
+      <input type="text" name="code" required placeholder="ANR" style="text-transform: uppercase; width: 110px;">
+    </label>
+    <label class="field" style="flex:1; min-width: 260px;">
+      <span>Entra group <small>(pick existing or type a new name)</small></span>
+      <span class="combo" id="mapping-combo">
+        <input type="text" autocomplete="off" placeholder="Pick or type a group name..."
+               data-role="combo-input" name="group_name">
+        <div class="combo-list" hidden data-role="combo-list"></div>
+      </span>
+      <input type="hidden" name="group_id" id="mapping-group-id">
+    </label>
+    <span class="badge badge-new" id="mapping-new-badge" hidden>Will create new group</span>
+    <button type="submit" class="btn btn-primary">Save mapping</button>
+  </form>
+
+  {% if mappings %}
+  <table class="users-table">
+    <thead>
+      <tr>
+        <th>Franchisee</th>
+        <th>Group</th>
+        <th>Group ID</th>
+        <th>Updated</th>
+        <th class="actions-col">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for code, m in mappings | dictsort %}
+      <tr>
+        <td><b>{{ code }}</b></td>
+        <td>{{ m.group_name }}</td>
+        <td class="mono">{{ m.group_id }}</td>
+        <td class="mono">{{ m.updated_at }}</td>
+        <td class="actions-col">
+          <form method="post" action="{{ url_for('main.report_mappings_delete', code=code) }}"
+                onsubmit="return confirm('Delete the mapping for {{ code }}? The Entra group itself is not touched.');">
+            <button type="submit" class="btn btn-tiny btn-secondary">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="empty-state">
+      <div class="art">&#128279;</div>
+      <h2>No mappings yet</h2>
+      <p>Upload an employee report and map each Franchisee to a group &ndash;
+         the mappings are remembered here for next time.</p>
+      <a class="btn btn-primary" href="{{ url_for('main.report_upload_page') }}">Upload a report</a>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var ALL_GROUPS = {{ groups_json | tojson }};
+  var combo = document.getElementById("mapping-combo");
+  var input = combo.querySelector('[data-role=combo-input]');
+  var list = combo.querySelector('[data-role=combo-list]');
+  var hiddenId = document.getElementById("mapping-group-id");
+  var newBadge = document.getElementById("mapping-new-badge");
+
+  function render(filter) {
+    var f = (filter || "").toLowerCase();
+    var matches = ALL_GROUPS.filter(function (g) {
+      return !f || g.name.toLowerCase().indexOf(f) !== -1;
+    }).slice(0, 30);
+    var html = matches.map(function (g) {
+      return '<div class="combo-item" data-id="' + g.id + '" data-name="' +
+             g.name.replace(/"/g, "&quot;") + '">' + g.name + '</div>';
+    }).join("");
+    if (filter && filter.trim()) {
+      html += '<div class="combo-item combo-create" data-create="1">+ Create new group "' +
+              filter.trim().replace(/</g, "&lt;") + '"</div>';
+    }
+    list.innerHTML = html || '<div class="combo-item muted">Type to create a new group</div>';
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", function () { render(input.value); });
+  input.addEventListener("input", function () {
+    hiddenId.value = "";
+    newBadge.hidden = !input.value.trim();
+    render(input.value);
+  });
+  list.addEventListener("mousedown", function (e) {
+    var item = e.target.closest(".combo-item");
+    if (!item) return;
+    e.preventDefault();
+    if (item.dataset.create) {
+      hiddenId.value = "";
+      newBadge.hidden = false;
+    } else if (item.dataset.name) {
+      input.value = item.dataset.name;
+      hiddenId.value = item.dataset.id;
+      newBadge.hidden = true;
+    }
+    list.hidden = true;
+  });
+  document.addEventListener("click", function (e) {
+    if (!combo.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+{% endblock %}

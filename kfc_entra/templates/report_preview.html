@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block title %}Report preview - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Report preview</h1>
+    <a class="btn btn-secondary" href="{{ url_for('main.report_upload_page') }}">Upload a different file</a>
+  </div>
+  <p class="muted">
+    Parsed <b>{{ total_rows }}</b> row(s) from <b>{{ filename }}</b> across
+    <b>{{ franchisees | length }}</b> Franchisee(s). Map each Franchisee to an
+    Entra group, then apply. Rows without a Yammer ID are not in Entra yet and
+    will be skipped (invite them individually via Add user).
+  </p>
+  {% if groups_error %}
+    <div class="flash flash-warning">
+      Could not load Entra groups for the picker: {{ groups_error }}.
+      You can still type new group names.
+    </div>
+  {% endif %}
+
+  <div class="report-toolbar">
+    <label class="checkbox">
+      <input type="checkbox" id="include-unknown">
+      <span>Include <b>UNK / UNKNOWN</b> rows (corporate &ndash; skipped by default)</span>
+    </label>
+    <button type="button" class="btn btn-primary" id="apply-btn">Apply to Entra groups</button>
+  </div>
+
+  <div class="bulk-panel" id="apply-panel" hidden></div>
+
+  <div class="franchisee-list">
+    {% for code, fr in franchisees.items() %}
+    <details class="franchisee" data-code="{{ code }}" {% if fr.is_unknown %}data-unknown="1"{% endif %}>
+      <summary>
+        <span class="fr-code">{{ code }}</span>
+        <span class="fr-market">{{ fr.market or 'Unknown owner' }}
+          {% if fr.sample_names %} &middot; e.g. {{ fr.sample_names | join(', ') }}{% endif %}
+        </span>
+        <span class="fr-counts">
+          <span class="badge">{{ fr.rows | length }} rows</span>
+          <span class="badge badge-ready">{{ fr.ready_count }} in Entra</span>
+          {% if fr.missing_entra_count %}
+            <span class="badge badge-missing">{{ fr.missing_entra_count }} not provisioned</span>
+          {% endif %}
+          {% if fr.is_unknown %}
+            <span class="badge badge-skip" data-role="skip-badge">skipped</span>
+          {% endif %}
+        </span>
+        <span class="fr-mapping" onclick="event.preventDefault(); event.stopPropagation();">
+          <span class="combo" data-code="{{ code }}">
+            <input type="text" autocomplete="off"
+                   placeholder="Pick or type a group name..."
+                   data-role="combo-input">
+            <div class="combo-list" hidden data-role="combo-list"></div>
+          </span>
+          <span class="badge badge-new" data-role="new-badge" hidden>Will create new group</span>
+          <span class="badge badge-ready" data-role="saved-badge" hidden>Using saved mapping</span>
+        </span>
+      </summary>
+      <div class="fr-body">
+        <table class="users-table">
+          <thead>
+            <tr><th>Name</th><th>Job role</th><th>Email</th><th>Yammer status</th><th>Entra</th></tr>
+          </thead>
+          <tbody>
+            {% for row in fr.rows %}
+            <tr>
+              <td>{{ row.name }}</td>
+              <td>{{ row.job_role }}</td>
+              <td class="mono">{{ row.email }}</td>
+              <td>{{ row.yammer_status }}</td>
+              <td>
+                {% if row.in_entra %}
+                  <span class="badge badge-ready">ready</span>
+                {% else %}
+                  <span class="badge badge-missing" title="No Yammer ID - not provisioned in Entra yet">skipped &ndash; not in Entra yet</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var ALL_GROUPS = {{ groups_json | tojson }};
+  var SAVED = {{ saved_mappings | tojson }};
+  var UPLOAD_ID = {{ upload_id | tojson }};
+
+  /* assignment state: code -> {group_id, group_name} */
+  var assignments = {};
+
+  function setAssignment(combo, groupId, groupName, fromSaved) {
+    var code = combo.dataset.code;
+    var holder = combo.parentElement;
+    var newBadge = holder.querySelector('[data-role=new-badge]');
+    var savedBadge = holder.querySelector('[data-role=saved-badge]');
+    if (!groupName) {
+      delete assignments[code];
+      newBadge.hidden = true;
+      savedBadge.hidden = true;
+      return;
+    }
+    assignments[code] = { group_id: groupId || "", group_name: groupName };
+    newBadge.hidden = !!groupId;
+    savedBadge.hidden = !(fromSaved && groupId);
+  }
+
+  function buildCombo(combo) {
+    var code = combo.dataset.code;
+    var input = combo.querySelector('[data-role=combo-input]');
+    var list = combo.querySelector('[data-role=combo-list]');
+
+    function render(filter) {
+      var f = (filter || "").toLowerCase();
+      var matches = ALL_GROUPS.filter(function (g) {
+        return !f || g.name.toLowerCase().indexOf(f) !== -1;
+      }).slice(0, 30);
+      var html = matches.map(function (g) {
+        return '<div class="combo-item" data-id="' + g.id + '" data-name="' +
+               g.name.replace(/"/g, "&quot;") + '">' + g.name + '</div>';
+      }).join("");
+      if (SAVED[code]) {
+        html = '<div class="combo-item" data-id="' + SAVED[code].group_id +
+               '" data-name="' + SAVED[code].group_name.replace(/"/g, "&quot;") +
+               '" data-saved="1">Use existing mapping: <b>' + SAVED[code].group_name +
+               '</b> <span class="muted">(saved)</span></div>' + html;
+      }
+      if (filter && filter.trim()) {
+        html += '<div class="combo-item combo-create" data-create="1">+ Create new group "' +
+                filter.trim().replace(/</g, "&lt;") + '"</div>';
+      }
+      list.innerHTML = html || '<div class="combo-item muted">Type to create a new group</div>';
+      list.hidden = false;
+    }
+
+    input.addEventListener("focus", function () { render(input.value); });
+    input.addEventListener("input", function () {
+      render(input.value);
+      // Typing invalidates a previous pick until something is chosen again.
+      if (input.value.trim()) {
+        setAssignment(combo, "", input.value.trim(), false);
+      } else {
+        setAssignment(combo, "", "", false);
+      }
+    });
+    list.addEventListener("mousedown", function (e) {
+      var item = e.target.closest(".combo-item");
+      if (!item) return;
+      e.preventDefault();
+      if (item.dataset.create) {
+        setAssignment(combo, "", input.value.trim(), false);
+      } else if (item.dataset.name) {
+        input.value = item.dataset.name;
+        setAssignment(combo, item.dataset.id, item.dataset.name, !!item.dataset.saved);
+      }
+      list.hidden = true;
+    });
+    document.addEventListener("click", function (e) {
+      if (!combo.contains(e.target)) list.hidden = true;
+    });
+
+    // Pre-fill from a saved mapping.
+    if (SAVED[code]) {
+      input.value = SAVED[code].group_name;
+      setAssignment(combo, SAVED[code].group_id, SAVED[code].group_name, true);
+    }
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll(".combo"), buildCombo);
+
+  /* unknown opt-in flips the "skipped" badges */
+  var includeUnknown = document.getElementById("include-unknown");
+  includeUnknown.addEventListener("change", function () {
+    Array.prototype.forEach.call(
+      document.querySelectorAll('.franchisee[data-unknown] [data-role=skip-badge]'),
+      function (b) { b.textContent = includeUnknown.checked ? "opted in" : "skipped"; }
+    );
+  });
+
+  /* apply */
+  var applyBtn = document.getElementById("apply-btn");
+  var panel = document.getElementById("apply-panel");
+  applyBtn.addEventListener("click", function () {
+    var mapped = Object.keys(assignments).length;
+    if (!mapped) {
+      kfcToast("Map at least one Franchisee to a group first.", "warning");
+      return;
+    }
+    var totalRows = {{ total_rows }};
+    var proceed = totalRows > 5
+      ? kfcConfirm({
+          title: "Apply group memberships?",
+          bodyHtml: "About to process <b>" + totalRows + "</b> row(s) across <b>" +
+                    mapped + "</b> mapped Franchisee(s). Users already in their " +
+                    "group are skipped, so re-running is safe.",
+          confirmLabel: "Apply now",
+        })
+      : Promise.resolve(confirm("Apply group memberships for " + mapped + " Franchisee(s)?"));
+    proceed.then(function (ok) {
+      if (!ok) return;
+      kfcBusy(applyBtn, true);
+      kfcRunBulk({
+        url: "{{ url_for('main.report_apply_stream') }}",
+        method: "POST",
+        body: {
+          upload_id: UPLOAD_ID,
+          include_unknown: includeUnknown.checked,
+          assignments: assignments,
+        },
+        panel: panel,
+        verb: "Adding",
+        failuresCsvName: "report-apply-failures.csv",
+        onDone: function () { kfcBusy(applyBtn, false); },
+      });
+    });
+  });
+})();
+</script>
+{% endblock %}

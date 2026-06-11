@@ -151,3 +151,117 @@ class GraphClient:
 
     def set_display_name(self, user_id: str, display_name: str) -> None:
         self.update_user(user_id, {"displayName": display_name})
+
+    # ---------- paged helpers ----------
+    def _collect_paged(
+        self,
+        path: str,
+        params: dict | None = None,
+        extra_headers: dict | None = None,
+        max_items: int = 5000,
+    ) -> list[dict]:
+        """Follow @odata.nextLink until exhausted (or max_items reached)."""
+        headers = dict(self._headers)
+        if extra_headers:
+            headers.update(extra_headers)
+        url = f"{GRAPH_BASE}{path}"
+        items: list[dict] = []
+        while url and len(items) < max_items:
+            resp = requests.get(url, headers=headers, params=params, timeout=DEFAULT_TIMEOUT)
+            if resp.status_code >= 400:
+                try:
+                    payload = resp.json()
+                    message = payload.get("error", {}).get("message", resp.text)
+                except ValueError:
+                    payload = None
+                    message = resp.text
+                raise GraphError(resp.status_code, message, payload)
+            data = resp.json()
+            items.extend(data.get("value", []))
+            url = data.get("@odata.nextLink")
+            params = None  # nextLink already carries the query string
+        return items[:max_items]
+
+    def list_users_by_type(self, user_type: str | None = None) -> list[GraphUser]:
+        """List all users, optionally filtered by userType (e.g. 'Guest').
+
+        Filtering on userType is an "advanced query" in Graph, so it needs
+        ConsistencyLevel: eventual plus $count=true.
+        """
+        params: dict[str, Any] = {
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$top": 999,
+        }
+        extra_headers: dict | None = None
+        if user_type:
+            params["$filter"] = f"userType eq '{user_type}'"
+            params["$count"] = "true"
+            extra_headers = {"ConsistencyLevel": "eventual"}
+        raw = self._collect_paged("/users", params=params, extra_headers=extra_headers)
+        return [GraphUser.from_api(u) for u in raw]
+
+    def get_user_by_email(self, email: str) -> GraphUser | None:
+        """Find a user by mail / UPN / otherMails. Returns None when not found."""
+        safe = email.replace("'", "''")
+        params = {
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$filter": (
+                f"mail eq '{safe}' or userPrincipalName eq '{safe}' "
+                f"or otherMails/any(c:c eq '{safe}')"
+            ),
+            "$count": "true",
+            "$top": 2,
+        }
+        raw = self._collect_paged(
+            "/users", params=params, extra_headers={"ConsistencyLevel": "eventual"}
+        )
+        return GraphUser.from_api(raw[0]) if raw else None
+
+    # ---------- groups ----------
+    def list_groups(self, search: str | None = None) -> list[GraphGroup]:
+        params: dict[str, Any] = {
+            "$select": "id,displayName,description,mailNickname",
+            "$top": 999,
+            "$orderby": "displayName",
+        }
+        extra_headers: dict | None = None
+        if search:
+            safe = search.replace("'", "''")
+            params["$filter"] = f"startswith(displayName, '{safe}')"
+            params["$count"] = "true"
+            extra_headers = {"ConsistencyLevel": "eventual"}
+        raw = self._collect_paged("/groups", params=params, extra_headers=extra_headers)
+        return [GraphGroup.from_api(g) for g in raw]
+
+    def create_group(self, display_name: str, description: str | None = None) -> GraphGroup:
+        """Create a security group (no mailbox)."""
+        from .groups import sanitise_mail_nickname  # local import avoids cycle
+
+        body = {
+            "displayName": display_name,
+            "description": description or "Created by KFC Entra User Manager",
+            "mailEnabled": False,
+            "securityEnabled": True,
+            "mailNickname": sanitise_mail_nickname(display_name),
+            "groupTypes": [],
+        }
+        resp = self._request("POST", "/groups", json=body)
+        return GraphGroup.from_api(resp.json())
+
+    def add_member_to_group(self, group_id: str, user_id: str) -> str:
+        """Add a user to a group. Returns 'added' or 'already_member'.
+
+        Graph answers 400 "One or more added object references already exist"
+        when the user is already in the group - we treat that as idempotent
+        success.
+        """
+        body = {
+            "@odata.id": f"{GRAPH_BASE}/directoryObjects/{user_id}",
+        }
+        try:
+            self._request("POST", f"/groups/{group_id}/members/$ref", json=body)
+            return "added"
+        except GraphError as exc:
+            if exc.status == 400 and "already exist" in (exc.message or "").lower():
+                return "already_member"
+            raise

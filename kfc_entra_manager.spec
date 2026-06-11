@@ -4,19 +4,20 @@
 
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
 hiddenimports = (
     collect_submodules("msal")
     + collect_submodules("webview")
+    + collect_submodules("openpyxl")
 )
 
 datas = [
     ("kfc_entra/templates", "kfc_entra/templates"),
     ("kfc_entra/static",    "kfc_entra/static"),
-]
+] + collect_data_files("openpyxl")
 
 a = Analysis(
     ["desktop.py"],
