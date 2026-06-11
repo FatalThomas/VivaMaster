@@ -51,29 +51,84 @@ from .version import __version__
 
 # Parsed uploads waiting for the apply step. This app is a single-process
 # local tool, so in-memory is fine; we keep only the most recent few.
+# In-memory mirror of the upload store, plus an on-disk copy in the per-user
+# config dir so closing the app no longer loses your parsed CSV.
 _UPLOAD_STORE: OrderedDict[str, list[dict]] = OrderedDict()
 _UPLOAD_STORE_MAX = 5
 
 
+def _uploads_dir():
+    from .mappings import config_dir
+    d = config_dir() / "uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _trim_uploads_dir() -> None:
+    """Keep only the most recent _UPLOAD_STORE_MAX upload files on disk."""
+    try:
+        files = sorted(
+            _uploads_dir().glob("*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for stale in files[_UPLOAD_STORE_MAX:]:
+            stale.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _stash_upload(rows: list[EmployeeRow]) -> str:
     token = uuid.uuid4().hex
-    _UPLOAD_STORE[token] = [r.to_dict() for r in rows]
+    payload = [r.to_dict() for r in rows]
+    _UPLOAD_STORE[token] = payload
     while len(_UPLOAD_STORE) > _UPLOAD_STORE_MAX:
         _UPLOAD_STORE.popitem(last=False)
+    # Persist to disk too - a 52k-row report takes ~30 MB of JSON which is
+    # cheap, and surviving an app restart is worth a lot of UX.
+    try:
+        with open(_uploads_dir() / f"{token}.json", "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        _trim_uploads_dir()
+    except OSError:
+        pass  # disk full / permissions - in-memory copy still works
     return token
 
 
 def _load_upload(token: str) -> list[EmployeeRow] | None:
     raw = _UPLOAD_STORE.get(token or "")
+    if raw is None and token:
+        try:
+            with open(_uploads_dir() / f"{token}.json", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            _UPLOAD_STORE[token] = raw  # warm the cache
+        except (OSError, ValueError):
+            raw = None
     if raw is None:
         return None
     return [EmployeeRow.from_dict(d) for d in raw]
 
 
 def _sse_response(events) -> Response:
+    """Wrap an event iterator in an SSE response with periodic heartbeats.
+
+    Long bulk operations can run for many minutes - SSE comment lines
+    (":heartbeat\\n\\n") sent every 15s keep the TCP connection from being
+    killed by idle timeouts (corporate proxies, WebView2 default fetch
+    behaviour) without affecting the client's JSON event parsing.
+    """
+    import time as _time
+
+    HEARTBEAT_SECONDS = 15
+
     def generate():
+        last_emit = _time.monotonic()
         for event in events:
             yield f"data: {json.dumps(event)}\n\n"
+            now = _time.monotonic()
+            if now - last_emit > HEARTBEAT_SECONDS:
+                yield ": heartbeat\n\n"
+            last_emit = now
 
     return Response(
         stream_with_context(generate()),

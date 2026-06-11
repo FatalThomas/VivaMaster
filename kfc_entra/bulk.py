@@ -187,13 +187,17 @@ def iter_apply_mappings(
             code, {"added": 0, "already_member": 0, "skipped": 0, "failed": 0}
         )
 
-    for i, row in enumerate(work, start=1):
+    # --- step 1: resolve user ids (yields "skipped" immediately for rows
+    # that can't be matched). Keeps order so the UI feels natural.
+    pending: list[dict] = []
+    current = 0
+    for row in work:
+        current += 1
         code = (row.franchisee or "UNK").strip().upper()
         label = row.email or row.name or f"row {row.row_number}"
         stats = bucket(code)
         target = resolved[code]  # guaranteed - we filtered to mapped-only above
 
-        # Resolve the Entra user id: prefer Yammer ID, else email lookup.
         user_id: str | None = None
         if row.in_entra:
             user_id = row.yammer_id.strip()
@@ -211,31 +215,57 @@ def iter_apply_mappings(
         if not user_id:
             stats["skipped"] += 1
             yield {
-                "type": "progress", "current": i, "total": total,
+                "type": "progress", "current": current, "total": total,
                 "franchisee": code, "user": label,
                 "status": "skipped", "reason": "Not in Entra yet (no Yammer ID and no match by email)",
             }
             continue
 
-        try:
-            outcome = client.add_member_to_group(target["group_id"], user_id)
-        except GraphError as exc:
-            stats["failed"] += 1
-            failures.append({"user": label, "franchisee": code, "reason": exc.message})
-            yield {
-                "type": "progress", "current": i, "total": total,
-                "franchisee": code, "user": label,
-                "status": "failed", "reason": exc.message,
-            }
-            continue
+        pending.append({
+            "row_index": current, "group_id": target["group_id"],
+            "user_id": user_id, "code": code, "label": label,
+        })
 
-        stats[outcome] += 1
-        yield {
-            "type": "progress", "current": i, "total": total,
-            "franchisee": code, "user": label,
-            "status": outcome,
-            "reason": "Already in the group" if outcome == "already_member" else "",
-        }
+    # --- step 2: add to groups in batches of 20 via Graph $batch (one HTTP
+    # round-trip per 20 users instead of per 1).
+    by_group: dict[str, list[dict]] = {}
+    for item in pending:
+        by_group.setdefault(item["group_id"], []).append(item)
+
+    BATCH_SIZE = 20
+    for group_id, items in by_group.items():
+        for i in range(0, len(items), BATCH_SIZE):
+            chunk = items[i : i + BATCH_SIZE]
+            user_ids = [c["user_id"] for c in chunk]
+            try:
+                results = client.batch_add_members_to_group(group_id, user_ids)
+            except GraphError as exc:
+                # Whole batch failed - mark each member of it as failed and continue.
+                results = {uid: ("failed", exc.message) for uid in user_ids}
+
+            for c in chunk:
+                outcome, reason = results.get(
+                    c["user_id"], ("failed", "No batch response for this user")
+                )
+                stats = bucket(c["code"])
+                stats[outcome] = stats.get(outcome, 0) + 1
+                if outcome == "failed":
+                    failures.append({
+                        "user": c["label"], "franchisee": c["code"], "reason": reason,
+                    })
+                yield {
+                    "type": "progress",
+                    "current": c["row_index"],
+                    "total": total,
+                    "franchisee": c["code"],
+                    "user": c["label"],
+                    "status": outcome,
+                    "reason": (
+                        "Already in the group"
+                        if outcome == "already_member"
+                        else reason
+                    ),
+                }
 
     totals = {"added": 0, "already_member": 0, "skipped": 0, "failed": 0}
     for stats in per_franchisee.values():

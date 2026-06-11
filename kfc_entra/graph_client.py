@@ -295,3 +295,55 @@ class GraphClient:
             if exc.status == 400 and "already exist" in (exc.message or "").lower():
                 return "already_member"
             raise
+
+    def batch_add_members_to_group(
+        self, group_id: str, user_ids: list[str]
+    ) -> dict[str, tuple[str, str]]:
+        """Add up to 20 users to a group via Graph's $batch endpoint.
+
+        Returns {user_id: (outcome, reason)} where outcome is one of
+        'added' / 'already_member' / 'failed'. Bundling 20 add-to-group
+        calls into one HTTP round-trip is roughly 20x faster than calling
+        add_member_to_group() in a loop.
+        """
+        if not user_ids:
+            return {}
+        if len(user_ids) > 20:
+            raise ValueError("Microsoft Graph $batch is limited to 20 requests.")
+
+        requests_body = [
+            {
+                "id": str(idx),
+                "method": "POST",
+                "url": f"/groups/{group_id}/members/$ref",
+                "headers": {"Content-Type": "application/json"},
+                "body": {"@odata.id": f"{GRAPH_BASE}/directoryObjects/{uid}"},
+            }
+            for idx, uid in enumerate(user_ids)
+        ]
+        resp = self._request("POST", "/$batch", json={"requests": requests_body})
+        results: dict[str, tuple[str, str]] = {}
+        for entry in resp.json().get("responses") or []:
+            try:
+                idx = int(entry.get("id", -1))
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= idx < len(user_ids):
+                continue
+            uid = user_ids[idx]
+            status = entry.get("status", 500)
+            if 200 <= status < 300 or status == 204:
+                results[uid] = ("added", "")
+                continue
+            body = entry.get("body") or {}
+            msg = (body.get("error") or {}).get("message", str(body))
+            if status == 400 and "already exist" in msg.lower():
+                results[uid] = ("already_member", "")
+            else:
+                results[uid] = ("failed", msg)
+        # Any user id we didn't see a response for is a Graph oddity - treat
+        # as failed so the caller surfaces it instead of silently dropping.
+        for uid in user_ids:
+            results.setdefault(uid, ("failed", "Graph $batch returned no response for this user."))
+        return results
+
