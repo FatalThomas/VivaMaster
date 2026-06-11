@@ -145,11 +145,36 @@ def iter_apply_mappings(
         }
 
     # --- work out the apply set ------------------------------------------
+    # Only touch rows whose Franchisee was successfully resolved to a
+    # group. Rows in unmapped Franchisees are left completely untouched -
+    # we summarise the count once instead of emitting a per-row "skipped"
+    # event, which previously made it look like the apply was running
+    # against every user in the report.
     work: list[EmployeeRow] = []
+    untouched_by_code: dict[str, int] = {}
     for row in rows:
+        code = (row.franchisee or "UNK").strip().upper()
         if row.is_unknown and not include_unknown:
+            untouched_by_code[code] = untouched_by_code.get(code, 0) + 1
+            continue
+        if code not in resolved:
+            untouched_by_code[code] = untouched_by_code.get(code, 0) + 1
             continue
         work.append(row)
+
+    if untouched_by_code:
+        unmapped_codes = sorted(untouched_by_code)
+        sample = ", ".join(unmapped_codes[:5])
+        if len(unmapped_codes) > 5:
+            sample += f", +{len(unmapped_codes) - 5} more"
+        yield {
+            "type": "phase",
+            "message": (
+                f"Leaving {sum(untouched_by_code.values())} row(s) from "
+                f"{len(unmapped_codes)} unmapped Franchisee(s) untouched: {sample}"
+            ),
+        }
+
     total = len(work)
     yield {"type": "start", "total": total}
 
@@ -163,19 +188,10 @@ def iter_apply_mappings(
         )
 
     for i, row in enumerate(work, start=1):
-        code = row.franchisee or "UNK"
+        code = (row.franchisee or "UNK").strip().upper()
         label = row.email or row.name or f"row {row.row_number}"
         stats = bucket(code)
-
-        target = resolved.get(code)
-        if not target:
-            stats["skipped"] += 1
-            yield {
-                "type": "progress", "current": i, "total": total,
-                "franchisee": code, "user": label,
-                "status": "skipped", "reason": "Franchisee not mapped to a group",
-            }
-            continue
+        target = resolved[code]  # guaranteed - we filtered to mapped-only above
 
         # Resolve the Entra user id: prefer Yammer ID, else email lookup.
         user_id: str | None = None
