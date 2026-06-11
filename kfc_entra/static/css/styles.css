@@ -675,3 +675,21 @@ a:hover { text-decoration: underline; }
 
 .bulk-head .bulk-status { flex: 1; }
 .bulk-head .bulk-cancel { margin-left: auto; }
+
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0 4px;
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.page-controls { display: flex; gap: 10px; align-items: center; }
+.btn-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}

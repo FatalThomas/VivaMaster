@@ -5,7 +5,7 @@
   <div class="panel-head">
     <h1>Users</h1>
     <div class="panel-head-actions">
-      <a class="btn btn-secondary" href="{{ url_for('main.users_list', q=search or None, type=type_filter or None) }}"
+      <a class="btn btn-secondary" href="{{ url_for('main.users_list', q=search or None, type=type_filter or None, refresh=1) }}"
          title="Re-fetch the user list from Microsoft Graph">&#x21bb; Refresh</a>
       <a class="btn btn-primary" href="{{ url_for('main.add_user') }}">+ Add user</a>
     </div>
@@ -86,6 +86,31 @@
       {% endfor %}
     </tbody>
   </table>
+
+  <nav class="pagination">
+    <span class="muted">
+      {% if total %}
+        Showing <b>{{ range_start }}-{{ range_end }}</b> of <b>{{ total }}</b>{% if not search %} cached{% endif %}
+      {% else %}
+        No users
+      {% endif %}
+    </span>
+    {% if total_pages > 1 %}
+    <div class="page-controls">
+      {% if page > 1 %}
+        <a class="btn btn-secondary btn-tiny" href="{{ url_for('main.users_list', q=search or None, type=type_filter or None, page=page-1) }}">&laquo; Prev</a>
+      {% else %}
+        <span class="btn btn-secondary btn-tiny btn-disabled">&laquo; Prev</span>
+      {% endif %}
+      <span class="muted">Page {{ page }} of {{ total_pages }}</span>
+      {% if page < total_pages %}
+        <a class="btn btn-secondary btn-tiny" href="{{ url_for('main.users_list', q=search or None, type=type_filter or None, page=page+1) }}">Next &raquo;</a>
+      {% else %}
+        <span class="btn btn-secondary btn-tiny btn-disabled">Next &raquo;</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </nav>
 
   <div class="sticky-bar" id="selection-bar" hidden>
     <span class="count" id="selection-count">0 selected</span>

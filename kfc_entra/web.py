@@ -59,6 +59,34 @@ from .version import __version__
 _UPLOAD_STORE: OrderedDict[str, list[dict]] = OrderedDict()
 _UPLOAD_STORE_MAX = 5
 
+# Per-session cache of the /users list, keyed by (sid, type_filter). First
+# fetch costs the Graph round-trips; subsequent filter swaps within the TTL
+# read straight from memory and feel instant. Refresh button busts it.
+import time as _time
+
+_USERS_CACHE: dict[tuple[str, str], tuple[float, list]] = {}
+_USERS_CACHE_TTL = 90  # seconds
+
+
+def _users_cache_get(sid: str, type_filter: str):
+    entry = _USERS_CACHE.get((sid, type_filter))
+    if not entry:
+        return None
+    cached_at, users = entry
+    if _time.time() - cached_at > _USERS_CACHE_TTL:
+        _USERS_CACHE.pop((sid, type_filter), None)
+        return None
+    return users
+
+
+def _users_cache_put(sid: str, type_filter: str, users: list) -> None:
+    _USERS_CACHE[(sid, type_filter)] = (_time.time(), users)
+
+
+def _users_cache_clear(sid: str) -> None:
+    for key in [k for k in _USERS_CACHE if k[0] == sid]:
+        _USERS_CACHE.pop(key, None)
+
 
 def _uploads_dir():
     from .mappings import config_dir
@@ -210,32 +238,66 @@ def users_list():
     type_filter = (request.args.get("type") or "all").lower()
     if type_filter not in ("all", "members", "guests"):
         type_filter = "all"
+    refresh = request.args.get("refresh") == "1"
+
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except (TypeError, ValueError):
+        page = 1
+    PAGE_SIZE = 100
+
+    sid = session.get("sid") or ""
+    if refresh and sid:
+        _users_cache_clear(sid)
+
     client = GraphClient(get_access_token())
     try:
         if search:
             # Search path: $search returns the first matching page (Graph
-            # caps it). The type filter is then applied client-side on
-            # whatever came back - best effort for partial matches.
+            # caps it). Type filter is best-effort client-side on the
+            # returned slice. Search results aren't cached - the term
+            # changes every keystroke and the result set is already small.
             users = list_users_sorted(client, search=search)
             if type_filter == "members":
                 users = [u for u in users if u.user_type == "Member"]
             elif type_filter == "guests":
                 users = [u for u in users if u.user_type == "Guest"]
+            cache_key = None
         else:
             # Browse path: push the userType filter to Graph and walk every
-            # page so the listing reflects the *whole* tenant, not just the
-            # first 100 names alphabetically. This is what was breaking
-            # "Guests only" - the unpaginated 100-user fetch could easily
-            # contain zero guests in a large tenant.
-            wanted = {"members": "Member", "guests": "Guest"}.get(type_filter)
-            users = client.list_users_by_type(wanted)
-            users.sort(key=lambda u: (u.display_name or "").lower())
+            # @odata.nextLink so the listing reflects the whole tenant,
+            # not just the first 100 names. Result is cached per (sid,
+            # type_filter) for 90 seconds so switching filter chips after
+            # the first hit is instant.
+            cache_key = type_filter
+            cached = _users_cache_get(sid, cache_key) if sid else None
+            if cached is not None:
+                users = cached
+            else:
+                wanted = {"members": "Member", "guests": "Guest"}.get(type_filter)
+                users = client.list_users_by_type(wanted)
+                users.sort(key=lambda u: (u.display_name or "").lower())
+                if sid:
+                    _users_cache_put(sid, cache_key, users)
+
+        total = len(users)
+        total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = min(page, total_pages)
+        start = (page - 1) * PAGE_SIZE
+        visible = users[start : start + PAGE_SIZE]
+
         return render_template(
             "users_list.html",
-            users=users,
+            users=visible,
             user=current_user(),
             search=search or "",
             type_filter=type_filter,
+            page=page,
+            total_pages=total_pages,
+            total=total,
+            page_size=PAGE_SIZE,
+            range_start=(start + 1) if total else 0,
+            range_end=start + len(visible),
         )
     except GraphError as exc:
         flash(f"Failed to load users: {exc.message}", "error")
@@ -245,6 +307,8 @@ def users_list():
             user=current_user(),
             search=search or "",
             type_filter=type_filter,
+            page=1, total_pages=1, total=0, page_size=PAGE_SIZE,
+            range_start=0, range_end=0,
         )
 
 
