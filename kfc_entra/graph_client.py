@@ -21,6 +21,23 @@ class GraphError(Exception):
 
 
 @dataclass
+class GraphGroup:
+    id: str
+    display_name: str
+    description: str | None
+    mail_nickname: str | None
+
+    @classmethod
+    def from_api(cls, data: dict) -> "GraphGroup":
+        return cls(
+            id=data.get("id", ""),
+            display_name=data.get("displayName") or "",
+            description=data.get("description"),
+            mail_nickname=data.get("mailNickname"),
+        )
+
+
+@dataclass
 class GraphUser:
     id: str
     display_name: str
