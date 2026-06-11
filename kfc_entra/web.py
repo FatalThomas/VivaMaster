@@ -109,6 +109,10 @@ def logout():
 # ---------- main routes ----------
 @main_bp.route("/")
 def landing():
+    # The OAuth redirect lands here: loopback redirect URIs for the
+    # pre-consented first-party client must use the root path.
+    if "code" in request.args and "state" in request.args:
+        return auth_callback()
     if current_user() and get_access_token():
         return redirect(url_for("main.dashboard"))
     return render_template("login.html")

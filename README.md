@@ -20,30 +20,32 @@ The same Python codebase runs in two modes:
 
 ---
 
-## 1. Create the Entra app registration
+## 1. Authentication - user-based, no admin consent
 
-In the [Entra admin center](https://entra.microsoft.com):
+There is **no app registration and no tenant-wide consent step**. The app
+signs in via Microsoft's pre-consented first-party public client (the same
+one the Azure CLI uses) and requests the delegated
+`Directory.AccessAsUser.All` scope. That means:
 
-1. **App registrations -> New registration**
-   - Name: `KFC Entra User Manager`
-   - Supported account types: *Accounts in this organizational directory only*
-   - Redirect URI: select **Public client / native (mobile & desktop)** and
-     enter `http://localhost:5000/auth/callback`
-2. Open the new registration. Copy the **Application (client) ID** and
-   **Directory (tenant) ID** - you'll paste these into `.env`.
-3. **Authentication -> Advanced settings**: confirm
-   *"Allow public client flows"* is **Yes**.
-4. **API permissions -> Add a permission -> Microsoft Graph -> Delegated
-   permissions** and add:
-   - `User.Invite.All`
-   - `User.ReadWrite.All`
-   - `Directory.ReadWrite.All`
-5. Click **Grant admin consent for KFC**.
-6. The signing-in admin needs the **Guest Inviter** + **User Administrator**
-   roles (or Global Administrator).
+- The signed-in user sees a normal Microsoft login - **no consent prompt**.
+- The app can only do what **that user's own Entra roles** allow. Tokens are
+  delegated; there is no app-level standing access.
+- Conditional Access, MFA, and sign-in logs all apply as usual, and every
+  change is attributed to the signed-in user in the Entra audit log.
 
-> If you change the port via `PORT` in `.env`, update the redirect URI in
-> Entra to match.
+Roles the signed-in user needs (assign only what they'll use):
+
+| Action in this app                  | Entra role required                     |
+| ----------------------------------- | --------------------------------------- |
+| Invite a new user                   | **Guest Inviter** (or User Administrator) |
+| Convert Guest -> Member, edit names | **User Administrator**                   |
+| Add users to groups / create groups | **Groups Administrator** (or group owner) |
+
+> Optional: if your org prefers its own app registration, set `CLIENT_ID`
+> (and `TENANT_ID`) in `.env`. Register `http://localhost:5000` (root path)
+> as a *Mobile and desktop applications* redirect URI and add the delegated
+> `Directory.AccessAsUser.All` permission - note a custom registration *does*
+> need admin consent for that scope; the default first-party client doesn't.
 
 ---
 
@@ -54,15 +56,14 @@ python -m venv .venv
 source .venv/bin/activate          # on Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-cp .env.example .env
-# Edit .env and fill in CLIENT_ID, TENANT_ID, FLASK_SECRET_KEY.
-
 python app.py                      # web mode  -> http://localhost:5000
 # or
 python desktop.py                  # desktop mode (native window)
 ```
 
-Sign in with your Entra admin account. You'll land on the dashboard.
+No `.env` needed - sign in with your work account and you'll land on the
+dashboard. Copy `.env.example` to `.env` only if you want to pin the tenant,
+fix the session key, or use a custom app registration.
 
 ---
 
@@ -98,9 +99,9 @@ pyinstaller kfc_entra_manager.spec
 Result: `dist\KFC Entra User Manager.exe` - a single-file launcher that
 opens the app in a native window.
 
-> The exe still needs a `.env` file next to it (or the same env vars set in
-> the user's environment) so it knows your client/tenant IDs. Ship `.env`
-> via group policy / Intune; do **not** bundle it into the exe.
+> The exe works with zero configuration - each user signs in with their own
+> work account and gets exactly the access their Entra roles grant. Drop a
+> `.env` next to the exe only to pin `TENANT_ID` or use a custom CLIENT_ID.
 
 ---
 
@@ -132,10 +133,14 @@ with `FLASK_SECRET_KEY`) and are refreshed silently via MSAL's
 - **Bind to localhost only.** `app.py` and `desktop.py` bind to `127.0.0.1`.
   Don't expose this on a LAN - it would hand your admin token to anyone
   who can hit the port.
-- **Public client, no secret.** The app holds no client secret. Auth is
-  delegated - every action runs as the signed-in admin.
+- **Public client, no secret.** The app holds no client secret and no
+  app-level permissions. Auth is delegated via `Directory.AccessAsUser.All` -
+  every action runs as, and is limited to the roles of, the signed-in user.
+- **Least privilege by role.** A user with only Guest Inviter can invite but
+  not convert userType; group operations need Groups Administrator or group
+  ownership. Graph returns 403s for anything beyond the user's roles, which
+  the UI surfaces per-row in bulk operations.
 - **Audit.** Every invite / update is logged in Entra's audit log against
-  the signing-in admin.
-- **Secret key.** `FLASK_SECRET_KEY` only protects the local session cookie.
-  Generate a random one per install:
-  `python -c "import secrets; print(secrets.token_hex(32))"`
+  the signing-in user.
+- **Secret key.** `FLASK_SECRET_KEY` only protects the local session cookie;
+  if unset, a random per-run key is generated (you re-sign-in after restart).
