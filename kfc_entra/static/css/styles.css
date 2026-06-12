@@ -166,6 +166,18 @@ a:hover { text-decoration: underline; }
 
 .actions { display: flex; gap: 12px; margin-top: 4px; }
 
+.setup-steps {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 14px;
+  margin: 12px 0;
+}
+.setup-steps summary { cursor: pointer; padding: 6px 0; font-size: 14px; }
+.setup-list { margin: 8px 0 12px 18px; padding: 0; }
+.setup-list li { margin: 8px 0; line-height: 1.55; }
+.setup-list ul { margin: 4px 0 0 16px; }
+.setup-list code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+
 .settings-form { display: flex; flex-direction: column; gap: 16px; max-width: 720px; }
 .settings-dest {
   border: 1px solid var(--line);

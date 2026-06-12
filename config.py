@@ -32,6 +32,9 @@ class Config:
     flask_secret_key: str
     invite_redirect_url: str
     port: int
+    # True when the user pasted their own Azure AD app's Client ID in
+    # Settings (or via the CLIENT_ID env var). Drives the scope list.
+    is_custom_client: bool = False
 
     @property
     def authority(self) -> str:
@@ -39,28 +42,54 @@ class Config:
 
     @property
     def scopes(self) -> list[str]:
-        # Delegated "act as the signed-in user" permission. Effective access
-        # is the intersection of this scope and the user's own Entra roles
+        # Delegated "act as the signed-in user" permissions. Effective access
+        # is the intersection of these scopes and the user's own Entra roles
         # (Guest Inviter, User Administrator, Groups Administrator, ...).
         #
-        # Why only this one scope: the Azure CLI public client is pre-
-        # authorized for Microsoft Graph's user_impersonation surface, which
-        # gets us Directory.AccessAsUser.All for free - no admin consent.
-        # Asking for richer Graph scopes (Files.ReadWrite, Sites.ReadWrite.All,
-        # ...) at the same time fails with AADSTS65002 ("must be configured
-        # via preauthorization") because Microsoft hasn't pre-authed this
-        # client for those scopes. The Settings page's cloud-sync feature
-        # therefore acquires its OneDrive / SharePoint token incrementally
-        # rather than rolling it into the primary sign-in.
+        # Default (Azure CLI client): just Directory.AccessAsUser.All, the
+        # only Graph scope Microsoft pre-authorizes for that public client.
+        # Asking for Files.ReadWrite / Sites.ReadWrite.All on the Azure CLI
+        # client fails with AADSTS65002.
+        #
+        # Custom client: the user has registered their own Azure AD app and
+        # ticked the file scopes there, so we can request all three at
+        # sign-in - which is what unlocks the OneDrive / SharePoint cloud
+        # sync of the mapping files.
+        if self.is_custom_client:
+            return [
+                "Directory.AccessAsUser.All",
+                "Files.ReadWrite",
+                "Sites.ReadWrite.All",
+            ]
         return ["Directory.AccessAsUser.All"]
 
 
 def load_config() -> Config:
+    # Override priority: env vars -> ~/.kfc_entra_manager/app_config.json -> default.
+    # Importing inside the function dodges a circular import (kfc_entra.app_config
+    # depends on kfc_entra.mappings, which is fine - but config.py is loaded by
+    # kfc_entra.web at app-start, before the package is fully importable in some
+    # test paths).
+    try:
+        from kfc_entra.app_config import load as load_app_config
+        file_cfg = load_app_config()
+    except Exception:  # noqa: BLE001 - never block startup on a bad config file
+        file_cfg = {"client_id": "", "tenant_id": ""}
+
+    client_id = (
+        os.environ.get("CLIENT_ID", "").strip()
+        or file_cfg.get("client_id", "")
+        or AZURE_CLI_CLIENT_ID
+    )
+    tenant_id = (
+        os.environ.get("TENANT_ID", "").strip()
+        or file_cfg.get("tenant_id", "")
+        or "organizations"
+    )
+
     return Config(
-        client_id=os.environ.get("CLIENT_ID", "").strip() or AZURE_CLI_CLIENT_ID,
-        # "organizations" lets any work/school account sign in; their home
-        # tenant is used. Pin TENANT_ID to restrict sign-in to one tenant.
-        tenant_id=os.environ.get("TENANT_ID", "").strip() or "organizations",
+        client_id=client_id,
+        tenant_id=tenant_id,
         # Only protects the local session cookie. An ephemeral key just means
         # you re-sign-in after an app restart, which is fine for a local tool.
         flask_secret_key=os.environ.get("FLASK_SECRET_KEY", "").strip()
@@ -69,4 +98,5 @@ def load_config() -> Config:
             "INVITE_REDIRECT_URL", "https://myapps.microsoft.com"
         ),
         port=int(os.environ.get("PORT", "5000")),
+        is_custom_client=client_id != AZURE_CLI_CLIENT_ID,
     )
