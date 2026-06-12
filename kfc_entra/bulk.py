@@ -109,12 +109,18 @@ def iter_apply_mappings(
     parsed_rows: Iterable[EmployeeRow],
     assignments: dict[str, dict],
     include_unknown: bool = False,
+    remove_missing: bool = False,
 ) -> Iterator[dict]:
-    """Add report rows to their Franchisee's Entra group.
+    """Add (and optionally remove) report rows from Franchisee groups.
 
     ``assignments`` maps Franchisee code -> {"group_id": str|None,
     "group_name": str}. Codes mapped to a name without an id get the group
     created first; the new mapping is persisted immediately.
+
+    When ``remove_missing`` is True, each mapped group is also reconciled:
+    users currently in the group who don't appear in the report for that
+    Franchisee get removed (DELETE /groups/{id}/members/{uid}/$ref via the
+    Graph $batch endpoint, 20 at a time).
     """
     rows = list(parsed_rows)
 
@@ -175,28 +181,18 @@ def iter_apply_mappings(
             ),
         }
 
-    total = len(work)
-    yield {"type": "start", "total": total}
-
-    per_franchisee: dict[str, dict] = {}
-    failures: list[dict] = []
-    email_cache: dict[str, str | None] = {}
-
-    def bucket(code: str) -> dict:
-        return per_franchisee.setdefault(
-            code, {"added": 0, "already_member": 0, "skipped": 0, "failed": 0}
-        )
-
-    # --- step 1: resolve user ids (yields "skipped" immediately for rows
-    # that can't be matched). Keeps order so the UI feels natural.
+    # --- resolve user IDs for every row before emitting any progress so we
+    # can compute the true total (adds + removes + unresolved-skips) up
+    # front and drive the progress bar in one continuous pass.
+    if work:
+        yield {"type": "phase", "message": "Resolving user accounts..."}
     pending: list[dict] = []
-    current = 0
+    skipped_no_user: list[dict] = []
+    email_cache: dict[str, str | None] = {}
     for row in work:
-        current += 1
         code = (row.franchisee or "UNK").strip().upper()
         label = row.email or row.name or f"row {row.row_number}"
-        stats = bucket(code)
-        target = resolved[code]  # guaranteed - we filtered to mapped-only above
+        target = resolved[code]  # guaranteed - we filtered to mapped-only
 
         user_id: str | None = None
         if row.in_entra:
@@ -213,64 +209,151 @@ def iter_apply_mappings(
                 email_cache[row.email] = user_id
 
         if not user_id:
-            stats["skipped"] += 1
-            yield {
-                "type": "progress", "current": current, "total": total,
-                "franchisee": code, "user": label,
-                "status": "skipped", "reason": "Not in Entra yet (no Yammer ID and no match by email)",
-            }
-            continue
+            skipped_no_user.append({"code": code, "label": label})
+        else:
+            pending.append({
+                "code": code, "label": label,
+                "user_id": user_id, "group_id": target["group_id"],
+            })
 
-        pending.append({
-            "row_index": current, "group_id": target["group_id"],
-            "user_id": user_id, "code": code, "label": label,
-        })
+    total_skipped = len(skipped_no_user)
+    total_adds = len(pending)
 
-    # --- step 2: add to groups in batches of 20 via Graph $batch (one HTTP
-    # round-trip per 20 users instead of per 1).
-    by_group: dict[str, list[dict]] = {}
+    # --- if remove_missing: for each resolved group, list current members
+    # and compute who's there but not in the report. Done BEFORE yielding
+    # "start" so the total reflects the whole operation - the progress bar
+    # fills smoothly across both add and remove phases.
+    removals_by_group: dict[str, list[dict]] = {}
+    if remove_missing:
+        yield {"type": "phase", "message": "Finding users no longer in the report..."}
+        report_uids_by_group: dict[str, set[str]] = {}
+        for item in pending:
+            report_uids_by_group.setdefault(item["group_id"], set()).add(item["user_id"])
+        for code, info in resolved.items():
+            gid = info["group_id"]
+            try:
+                current_members = client.list_group_members(gid)
+            except GraphError as exc:
+                yield {
+                    "type": "phase",
+                    "message": (
+                        f"Couldn't list members of {info.get('group_name') or code}: "
+                        f"{exc.message}. Skipping its removal pass."
+                    ),
+                }
+                continue
+            keep = report_uids_by_group.get(gid, set())
+            to_remove = [m for m in current_members if m.id not in keep]
+            if to_remove:
+                removals_by_group[gid] = [
+                    {
+                        "code": code,
+                        "user_id": m.id,
+                        "label": m.mail or m.user_principal_name or m.display_name or m.id,
+                    }
+                    for m in to_remove
+                ]
+
+    total_removes = sum(len(v) for v in removals_by_group.values())
+    total = total_skipped + total_adds + total_removes
+    yield {"type": "start", "total": total}
+
+    per_franchisee: dict[str, dict] = {}
+    failures: list[dict] = []
+    emitted = 0
+
+    def bucket(code: str) -> dict:
+        return per_franchisee.setdefault(
+            code,
+            {
+                "added": 0, "already_member": 0, "skipped": 0, "failed": 0,
+                "removed": 0, "not_in_group": 0,
+            },
+        )
+
+    # --- emit "skipped" events for users we couldn't resolve to Entra IDs.
+    for s in skipped_no_user:
+        emitted += 1
+        stats = bucket(s["code"])
+        stats["skipped"] += 1
+        yield {
+            "type": "progress", "current": emitted, "total": total,
+            "franchisee": s["code"], "user": s["label"],
+            "status": "skipped",
+            "reason": "Not in Entra yet (no Yammer ID and no match by email)",
+        }
+
+    # --- batch-add: 20 per Graph round-trip via $batch.
+    by_group_add: dict[str, list[dict]] = {}
     for item in pending:
-        by_group.setdefault(item["group_id"], []).append(item)
+        by_group_add.setdefault(item["group_id"], []).append(item)
 
     BATCH_SIZE = 20
-    for group_id, items in by_group.items():
+    for group_id, items in by_group_add.items():
         for i in range(0, len(items), BATCH_SIZE):
             chunk = items[i : i + BATCH_SIZE]
             user_ids = [c["user_id"] for c in chunk]
             try:
                 results = client.batch_add_members_to_group(group_id, user_ids)
             except GraphError as exc:
-                # Whole batch failed - mark each member of it as failed and continue.
                 results = {uid: ("failed", exc.message) for uid in user_ids}
-
             for c in chunk:
-                outcome, reason = results.get(
-                    c["user_id"], ("failed", "No batch response for this user")
-                )
+                emitted += 1
+                outcome, reason = results.get(c["user_id"], ("failed", "No batch response for this user"))
                 stats = bucket(c["code"])
                 stats[outcome] = stats.get(outcome, 0) + 1
                 if outcome == "failed":
                     failures.append({
-                        "user": c["label"], "franchisee": c["code"], "reason": reason,
+                        "user": c["label"], "franchisee": c["code"],
+                        "reason": reason, "action": "add",
                     })
                 yield {
-                    "type": "progress",
-                    "current": c["row_index"],
-                    "total": total,
-                    "franchisee": c["code"],
-                    "user": c["label"],
+                    "type": "progress", "current": emitted, "total": total,
+                    "franchisee": c["code"], "user": c["label"],
+                    "status": outcome,
+                    "reason": "Already in the group" if outcome == "already_member" else reason,
+                }
+
+    # --- batch-remove: 20 per Graph round-trip via $batch (DELETE/$ref).
+    if removals_by_group:
+        yield {
+            "type": "phase",
+            "message": f"Removing {total_removes} user(s) no longer in the report...",
+        }
+    for group_id, items in removals_by_group.items():
+        for i in range(0, len(items), BATCH_SIZE):
+            chunk = items[i : i + BATCH_SIZE]
+            user_ids = [c["user_id"] for c in chunk]
+            try:
+                results = client.batch_remove_members_from_group(group_id, user_ids)
+            except GraphError as exc:
+                results = {uid: ("failed", exc.message) for uid in user_ids}
+            for c in chunk:
+                emitted += 1
+                outcome, reason = results.get(c["user_id"], ("failed", "No batch response for this user"))
+                stats = bucket(c["code"])
+                stats[outcome] = stats.get(outcome, 0) + 1
+                if outcome == "failed":
+                    failures.append({
+                        "user": c["label"], "franchisee": c["code"],
+                        "reason": reason, "action": "remove",
+                    })
+                yield {
+                    "type": "progress", "current": emitted, "total": total,
+                    "franchisee": c["code"], "user": c["label"],
                     "status": outcome,
                     "reason": (
-                        "Already in the group"
-                        if outcome == "already_member"
-                        else reason
+                        reason if outcome == "failed"
+                        else "Wasn't in the group" if outcome == "not_in_group"
+                        else "Removed from the group"
                     ),
                 }
 
-    totals = {"added": 0, "already_member": 0, "skipped": 0, "failed": 0}
+    totals = {"added": 0, "already_member": 0, "skipped": 0, "failed": 0,
+              "removed": 0, "not_in_group": 0}
     for stats in per_franchisee.values():
         for key in totals:
-            totals[key] += stats[key]
+            totals[key] += stats.get(key, 0)
 
     yield {
         "type": "done",

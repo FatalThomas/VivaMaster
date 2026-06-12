@@ -347,3 +347,66 @@ class GraphClient:
             results.setdefault(uid, ("failed", "Graph $batch returned no response for this user."))
         return results
 
+    def list_group_members(self, group_id: str) -> list[GraphUser]:
+        """Return every user-type member of a group (paged).
+
+        Uses the OData cast `microsoft.graph.user` so Graph returns only
+        user members, not nested groups or service principals - which
+        matters when computing "who's in the group but not in the report".
+        """
+        params: dict[str, Any] = {
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$top": 999,
+        }
+        raw = self._collect_paged(
+            f"/groups/{group_id}/members/microsoft.graph.user",
+            params=params,
+        )
+        return [GraphUser.from_api(u) for u in raw]
+
+    def batch_remove_members_from_group(
+        self, group_id: str, user_ids: list[str]
+    ) -> dict[str, tuple[str, str]]:
+        """Remove up to 20 users from a group via Graph $batch.
+
+        Returns {user_id: (outcome, reason)} where outcome is one of
+        'removed' / 'not_in_group' / 'failed'.
+        """
+        if not user_ids:
+            return {}
+        if len(user_ids) > 20:
+            raise ValueError("Microsoft Graph $batch is limited to 20 requests.")
+
+        requests_body = [
+            {
+                "id": str(idx),
+                "method": "DELETE",
+                "url": f"/groups/{group_id}/members/{uid}/$ref",
+            }
+            for idx, uid in enumerate(user_ids)
+        ]
+        resp = self._request("POST", "/$batch", json={"requests": requests_body})
+        results: dict[str, tuple[str, str]] = {}
+        for entry in resp.json().get("responses") or []:
+            try:
+                idx = int(entry.get("id", -1))
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= idx < len(user_ids):
+                continue
+            uid = user_ids[idx]
+            status = entry.get("status", 500)
+            if 200 <= status < 300 or status == 204:
+                results[uid] = ("removed", "")
+                continue
+            body = entry.get("body") or {}
+            msg = (body.get("error") or {}).get("message", str(body))
+            lower = msg.lower()
+            if status == 404 or "does not exist" in lower or "could not be found" in lower:
+                results[uid] = ("not_in_group", "")
+            else:
+                results[uid] = ("failed", msg)
+        for uid in user_ids:
+            results.setdefault(uid, ("failed", "Graph $batch returned no response for this user."))
+        return results
+

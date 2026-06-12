@@ -24,6 +24,12 @@
       <input type="checkbox" id="include-unknown">
       <span>Include <b>UNK / UNKNOWN</b> rows (corporate &ndash; skipped by default)</span>
     </label>
+    <label class="checkbox">
+      <input type="checkbox" id="remove-missing">
+      <span>Also <b>remove</b> users from each group who aren&rsquo;t in this report
+            <small>(reconcile)</small>
+      </span>
+    </label>
     <button type="button" class="btn btn-primary" id="apply-btn">Apply to Entra groups</button>
   </div>
 
@@ -188,6 +194,7 @@
 
   /* apply */
   var applyBtn = document.getElementById("apply-btn");
+  var removeMissing = document.getElementById("remove-missing");
   var panel = document.getElementById("apply-panel");
   applyBtn.addEventListener("click", function () {
     var mapped = Object.keys(assignments).length;
@@ -196,13 +203,21 @@
       return;
     }
     var totalRows = {{ total_rows }};
-    var proceed = totalRows > 5
+    var reconcile = removeMissing.checked;
+    var body = reconcile
+      ? "About to process <b>" + totalRows + "</b> row(s) across <b>" +
+        mapped + "</b> mapped Franchisee(s). With <b>Reconcile</b> ticked, " +
+        "users currently in any mapped group but <b>not in this report</b> " +
+        "will also be <b>removed from that group</b>. Their Entra accounts " +
+        "are not deleted - only the group membership is revoked."
+      : "About to process <b>" + totalRows + "</b> row(s) across <b>" +
+        mapped + "</b> mapped Franchisee(s). Users already in their " +
+        "group are skipped, so re-running is safe.";
+    var proceed = totalRows > 5 || reconcile
       ? kfcConfirm({
-          title: "Apply group memberships?",
-          bodyHtml: "About to process <b>" + totalRows + "</b> row(s) across <b>" +
-                    mapped + "</b> mapped Franchisee(s). Users already in their " +
-                    "group are skipped, so re-running is safe.",
-          confirmLabel: "Apply now",
+          title: reconcile ? "Apply &amp; reconcile group memberships?" : "Apply group memberships?",
+          bodyHtml: body,
+          confirmLabel: reconcile ? "Apply &amp; reconcile" : "Apply now",
         })
       : Promise.resolve(confirm("Apply group memberships for " + mapped + " Franchisee(s)?"));
     proceed.then(function (ok) {
@@ -214,10 +229,11 @@
         body: {
           upload_id: UPLOAD_ID,
           include_unknown: includeUnknown.checked,
+          remove_missing: reconcile,
           assignments: assignments,
         },
         panel: panel,
-        verb: "Adding",
+        verb: reconcile ? "Reconciling" : "Adding",
         failuresCsvName: "report-apply-failures.csv",
         onDone: function () { kfcBusy(applyBtn, false); },
       });

@@ -559,10 +559,14 @@ def report_apply_stream():
     if not isinstance(assignments, dict):
         assignments = {}
     include_unknown = bool(payload.get("include_unknown"))
+    remove_missing = bool(payload.get("remove_missing"))
     client = GraphClient(get_access_token())
     return _sse_response(
         iter_apply_mappings(
-            client, rows, assignments=assignments, include_unknown=include_unknown
+            client, rows,
+            assignments=assignments,
+            include_unknown=include_unknown,
+            remove_missing=remove_missing,
         )
     )
 
