@@ -31,6 +31,11 @@ load_dotenv(Path(__file__).parent / ".env")
 # screen on first sign-in, never again.
 KFC_APP_CLIENT_ID = "6ae76fa1-f2c9-4b64-b7af-1d0fb59ce17d"
 
+# KFC's Entra tenant ID (yumau.onmicrosoft.com). Required because the app
+# registration is single-tenant - using "organizations" or "common" as the
+# authority would 401 with AADSTS50059 "no tenant-identifying information".
+KFC_TENANT_ID = "a48b58d3-4ae6-4310-bd85-016f3555e958"
+
 
 @dataclass(frozen=True)
 class Config:
@@ -79,7 +84,7 @@ def load_config() -> Config:
     tenant_id = (
         os.environ.get("TENANT_ID", "").strip()
         or file_cfg.get("tenant_id", "")
-        or "organizations"
+        or KFC_TENANT_ID
     )
 
     return Config(
