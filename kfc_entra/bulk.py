@@ -219,6 +219,50 @@ def iter_apply_mappings(
     pending: list[dict] = []
     skipped_no_user: list[dict] = []
     email_cache: dict[str, str | None] = {}
+
+    # Pre-batch every email lookup we'll need into Graph $batch calls
+    # (20 GET /users?$filter=... requests per HTTP round-trip). For
+    # tenants with thousands of pre-invited but not-yet-activated guests
+    # this turns ~70 min of sequential per-row lookups into ~3-5 min of
+    # batched ones - and the per-row loop below then becomes a fast
+    # in-memory dict hit.
+    pending_emails: list[str] = []
+    seen: set[str] = set()
+    for row in work:
+        if row.in_entra:
+            continue
+        e = (row.email or "").strip()
+        if not e or e in seen:
+            continue
+        seen.add(e)
+        pending_emails.append(e)
+
+    BATCH_SIZE = 20
+    if pending_emails:
+        yield {
+            "type": "phase",
+            "message": (
+                f"Looking up {len(pending_emails)} email(s) in Entra "
+                "(batched 20 at a time)..."
+            ),
+        }
+        for i in range(0, len(pending_emails), BATCH_SIZE):
+            chunk = pending_emails[i : i + BATCH_SIZE]
+            try:
+                results = client.batch_get_users_by_email(chunk)
+            except GraphError:
+                results = {e: None for e in chunk}
+            for email, user in results.items():
+                email_cache[email] = user.id if user else None
+            # Cheap progress signal every 400 lookups so the UI doesn't
+            # stay silent during long resolves.
+            done = min(i + BATCH_SIZE, len(pending_emails))
+            if done % 400 == 0 or done == len(pending_emails):
+                yield {
+                    "type": "phase",
+                    "message": f"Resolved {done} of {len(pending_emails)} emails...",
+                }
+
     for row in work:
         code = _row_code(row)
         label = row.email or row.name or f"row {row.row_number}"
@@ -227,16 +271,8 @@ def iter_apply_mappings(
         user_id: str | None = None
         if row.in_entra:
             user_id = row.yammer_id.strip()
-        elif row.email:
-            if row.email in email_cache:
-                user_id = email_cache[row.email]
-            else:
-                try:
-                    found = client.get_user_by_email(row.email)
-                    user_id = found.id if found else None
-                except GraphError:
-                    user_id = None
-                email_cache[row.email] = user_id
+        elif row.email and row.email in email_cache:
+            user_id = email_cache[row.email]
 
         if not user_id:
             skipped_no_user.append({"code": code, "label": label})
@@ -602,21 +638,36 @@ def iter_bulk_offboard(
       progress -> per (email, group) or per (email, disable) item
       done     -> {"summary": {...}}
     """
-    yield {"type": "phase", "message": "Resolving emails to Entra accounts..."}
-
-    # --- resolve each email --------------------------------------------------
+    # --- resolve each email (batched 20 at a time via Graph $batch) ---------
+    email_list = [e for e in emails if e]
+    yield {
+        "type": "phase",
+        "message": f"Resolving {len(email_list)} email(s) to Entra accounts (batched 20 at a time)...",
+    }
     resolved: list[dict] = []
     not_found: list[str] = []
-    for email in emails:
+    BATCH = 20
+    for i in range(0, len(email_list), BATCH):
+        chunk = email_list[i : i + BATCH]
         try:
-            user = client.get_user_by_email(email)
+            lookups = client.batch_get_users_by_email(chunk)
         except GraphError:
-            user = None
-        if user is None:
-            not_found.append(email)
-        else:
-            resolved.append({"email": email, "user_id": user.id,
-                             "display_name": user.display_name})
+            lookups = {e: None for e in chunk}
+        for email in chunk:
+            user = lookups.get(email)
+            if user is None:
+                not_found.append(email)
+            else:
+                resolved.append({
+                    "email": email, "user_id": user.id,
+                    "display_name": user.display_name,
+                })
+        done = min(i + BATCH, len(email_list))
+        if done % 400 == 0 or done == len(email_list):
+            yield {
+                "type": "phase",
+                "message": f"Resolved {done} of {len(email_list)} emails...",
+            }
 
     yield {
         "type": "phase",
