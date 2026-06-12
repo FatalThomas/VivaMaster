@@ -17,13 +17,23 @@
     <code>{{ local_dir }}</code> and keep working if sync is off or offline.
   </p>
 
+  <div class="flash flash-warning">
+    <b>Temporarily unavailable.</b> Cloud sync needs OneDrive / SharePoint
+    permissions that aren&rsquo;t included in the default sign-in. A future
+    release will wire up a separate consent step the first time you turn it
+    on. Until then, mappings save locally only &mdash; copy
+    <code>{{ local_dir }}</code> between machines if you need them on more
+    than one PC.
+  </div>
+
   {% if cloud_settings.last_error %}
     <div class="flash flash-warning">
       Last sync error: {{ cloud_settings.last_error }}
     </div>
   {% endif %}
 
-  <form method="post" action="{{ url_for('main.settings_save') }}" class="settings-form">
+  <form method="post" action="{{ url_for('main.settings_save') }}" class="settings-form"
+        style="opacity: 0.55; pointer-events: none;">
     <label class="checkbox">
       <input type="checkbox" name="enabled" id="cloud-enabled"
              {% if cloud_settings.enabled %}checked{% endif %}>

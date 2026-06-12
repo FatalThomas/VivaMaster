@@ -11,25 +11,6 @@
     employee report. Pick an existing Entra group, or type a new name and the
     group will be created when you save.
   </p>
-  {% if cloud_settings.enabled %}
-    <div class="flash flash-success">
-      Cloud sync is <b>ON</b> &mdash;
-      {% if cloud_settings.destination == 'sharepoint' %}
-        SharePoint &middot; <b>{{ cloud_settings.sharepoint_site_name or '(site)' }}</b>
-      {% else %}
-        OneDrive (this user)
-      {% endif %}
-      &middot; <a href="{{ url_for('main.settings_page') }}">change</a>.
-      {% if cloud_settings.last_push_at %}
-        Last push <span class="mono">{{ cloud_settings.last_push_at }}</span>.
-      {% endif %}
-    </div>
-  {% else %}
-    <div class="flash flash-warning">
-      Cloud sync is <b>off</b> &mdash; mappings only live on this PC.
-      <a href="{{ url_for('main.settings_page') }}">Turn it on</a> to share them across devices.
-    </div>
-  {% endif %}
   {% if sync_warning %}
     <div class="flash flash-warning">Couldn't pull from cloud: {{ sync_warning }}</div>
   {% endif %}
