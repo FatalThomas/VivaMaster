@@ -886,3 +886,18 @@ a:hover { text-decoration: underline; }
   border-color: rgba(255, 255, 255, 0.3);
   border-top-color: white;
 }
+
+/* Tenant cross-reference row on the report previews */
+.xref-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  margin: 12px 0 18px;
+  background: #fff8e1;
+  border: 1px solid #f0d890;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.xref-row .btn { flex: 0 0 auto; }
+.xref-row .muted { flex: 1; line-height: 1.5; }

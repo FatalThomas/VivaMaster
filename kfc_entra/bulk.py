@@ -113,6 +113,7 @@ def iter_apply_mappings(
     delete_missing: bool = False,
     grouping: str = "franchisee",
     promote_community_admins: bool = False,
+    email_lookup: dict[str, str | None] | None = None,
 ) -> Iterator[dict]:
     """Add (and optionally remove + delete) report rows from per-bucket groups.
 
@@ -215,27 +216,32 @@ def iter_apply_mappings(
     # can compute the true total (adds + removes + unresolved-skips) up
     # front and drive the progress bar in one continuous pass.
     if work:
-        yield {"type": "phase", "message": "Resolving user accounts..."}
+        yield {"type": "phase", "message": "Cross-referencing emails against the tenant..."}
     pending: list[dict] = []
     skipped_no_user: list[dict] = []
-    email_cache: dict[str, str | None] = {}
 
-    # Pre-batch every email lookup we'll need into Graph $batch calls
-    # (20 GET /users?$filter=... requests per HTTP round-trip). For
-    # tenants with thousands of pre-invited but not-yet-activated guests
-    # this turns ~70 min of sequential per-row lookups into ~3-5 min of
-    # batched ones - and the per-row loop below then becomes a fast
-    # in-memory dict hit.
+    # Source of truth is the tenant, not the report: every email is looked
+    # up by /users?$filter=mail eq <e> ... regardless of what the report's
+    # Yammer ID column says. The Yammer ID column only flips to a UUID
+    # once a guest activates Viva Engage, so pre-invited-but-not-yet-
+    # activated users would be wrongly classified as "not in Entra" if we
+    # trusted it. Email cache is preferred over a fresh lookup when the
+    # caller (the web route) passes one in - it's the result of the
+    # preview's "Check against tenant" pass and is good to re-use.
+    email_cache: dict[str, str | None] = (
+        dict(email_lookup) if email_lookup else {}
+    )
+
     pending_emails: list[str] = []
     seen: set[str] = set()
     for row in work:
-        if row.in_entra:
-            continue
         e = (row.email or "").strip()
         if not e or e in seen:
             continue
         seen.add(e)
-        pending_emails.append(e)
+        # Only look up emails we don't already have a cached answer for.
+        if e not in email_cache:
+            pending_emails.append(e)
 
     BATCH_SIZE = 20
     if pending_emails:
@@ -254,8 +260,6 @@ def iter_apply_mappings(
                 results = {e: None for e in chunk}
             for email, user in results.items():
                 email_cache[email] = user.id if user else None
-            # Cheap progress signal every 400 lookups so the UI doesn't
-            # stay silent during long resolves.
             done = min(i + BATCH_SIZE, len(pending_emails))
             if done % 400 == 0 or done == len(pending_emails):
                 yield {
@@ -268,11 +272,8 @@ def iter_apply_mappings(
         label = row.email or row.name or f"row {row.row_number}"
         target = resolved[code]  # guaranteed - we filtered to mapped-only
 
-        user_id: str | None = None
-        if row.in_entra:
-            user_id = row.yammer_id.strip()
-        elif row.email and row.email in email_cache:
-            user_id = email_cache[row.email]
+        # Always the tenant's answer; ignore the Yammer ID column entirely.
+        user_id = email_cache.get((row.email or "").strip()) if row.email else None
 
         if not user_id:
             skipped_no_user.append({"code": code, "label": label})
@@ -622,6 +623,68 @@ def parse_offboard_emails(content: bytes, filename: str) -> list[str]:
         seen.add(key)
         out.append(s)
     return out
+
+
+def iter_cross_reference(
+    client: GraphClient,
+    emails: Iterable[str],
+    lookup_sink: dict[str, str | None],
+) -> Iterator[dict]:
+    """Batch-lookup ``emails`` against the tenant, streaming progress.
+
+    Writes resolved {email: user_id|None} mappings into ``lookup_sink``
+    (mutated in place). Used by the report preview's "Check against
+    tenant" button to populate badges without trusting the report's
+    Yammer ID column for who's actually in Entra.
+
+    Emits SSE-shaped events::
+
+        {"type": "start", "total": N}
+        {"type": "progress", "current": M, "total": N,
+         "in_tenant": X, "missing": Y}
+        {"type": "done", "in_tenant": X, "missing": Y, "total": N}
+    """
+    unique = []
+    seen = set()
+    for raw in emails:
+        e = (raw or "").strip()
+        if not e or e in seen:
+            continue
+        seen.add(e)
+        unique.append(e)
+
+    total = len(unique)
+    yield {"type": "start", "total": total}
+
+    BATCH = 20
+    in_tenant = 0
+    missing = 0
+    for i in range(0, total, BATCH):
+        chunk = unique[i : i + BATCH]
+        try:
+            results = client.batch_get_users_by_email(chunk)
+        except GraphError:
+            results = {e: None for e in chunk}
+        for email, user in results.items():
+            uid = user.id if user else None
+            lookup_sink[email] = uid
+            if uid:
+                in_tenant += 1
+            else:
+                missing += 1
+        yield {
+            "type": "progress",
+            "current": min(i + BATCH, total),
+            "total": total,
+            "in_tenant": in_tenant,
+            "missing": missing,
+        }
+    yield {
+        "type": "done",
+        "in_tenant": in_tenant,
+        "missing": missing,
+        "total": total,
+    }
 
 
 def iter_bulk_offboard(

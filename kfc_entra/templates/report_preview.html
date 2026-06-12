@@ -14,8 +14,9 @@
   <p class="muted">
     Parsed <b>{{ total_rows }}</b> row(s) from <b>{{ filename }}</b> across
     <b>{{ franchisees | length }}</b> Franchisee(s). Map each Franchisee to an
-    Entra group, then apply. Rows without a Yammer ID are not in Entra yet and
-    will be skipped (invite them individually via Add user).
+    Entra group, then apply. The report's Yammer ID column is ignored -
+    every email is cross-referenced against the tenant at apply time so
+    pre-invited guests are correctly identified.
   </p>
   {% if groups_error %}
     <div class="flash flash-warning">
@@ -23,6 +24,16 @@
       You can still type new group names.
     </div>
   {% endif %}
+
+  <div class="xref-row">
+    <button type="button" class="btn btn-secondary" id="xref-btn">
+      &#x21bb; Check against tenant
+    </button>
+    <span class="muted" id="xref-status">
+      Per-Franchisee badges show row counts. Click to fill in
+      <b>in tenant</b> / <b>not in tenant</b> based on actual email lookup.
+    </span>
+  </div>
 
   <div class="report-toolbar">
     <label class="checkbox">
@@ -56,10 +67,8 @@
         </span>
         <span class="fr-counts">
           <span class="badge">{{ fr.rows | length }} rows</span>
-          <span class="badge badge-ready">{{ fr.ready_count }} in Entra</span>
-          {% if fr.missing_entra_count %}
-            <span class="badge badge-missing">{{ fr.missing_entra_count }} not provisioned</span>
-          {% endif %}
+          <span class="badge badge-ready" data-role="in-tenant-badge" data-code="{{ code }}" hidden>0 in tenant</span>
+          <span class="badge badge-missing" data-role="missing-badge" data-code="{{ code }}" hidden>0 not in tenant</span>
           {% if fr.is_unknown %}
             <span class="badge badge-skip" data-role="skip-badge">skipped</span>
           {% endif %}
@@ -78,22 +87,15 @@
       <div class="fr-body">
         <table class="users-table">
           <thead>
-            <tr><th>Name</th><th>Job role</th><th>Email</th><th>Yammer status</th><th>Entra</th></tr>
+            <tr><th>Name</th><th>Job role</th><th>Email</th><th>Entra</th></tr>
           </thead>
           <tbody>
             {% for row in fr.rows %}
-            <tr>
+            <tr data-row-email="{{ (row.email or '') | lower }}">
               <td>{{ row.name }}</td>
               <td>{{ row.job_role }}</td>
               <td class="mono">{{ row.email }}</td>
-              <td>{{ row.yammer_status }}</td>
-              <td>
-                {% if row.in_entra %}
-                  <span class="badge badge-ready">ready</span>
-                {% else %}
-                  <span class="badge badge-missing" title="No Yammer ID - not provisioned in Entra yet">skipped &ndash; not in Entra yet</span>
-                {% endif %}
-              </td>
+              <td><span class="badge" data-role="row-entra">unchecked</span></td>
             </tr>
             {% endfor %}
           </tbody>
@@ -285,6 +287,77 @@
         failuresCsvName: "report-apply-failures.csv",
         onDone: function () { kfcBusy(applyBtn, false); },
       });
+    });
+  });
+
+  /* ---- cross-reference against the tenant ---- */
+  var xrefBtn = document.getElementById("xref-btn");
+  var xrefStatus = document.getElementById("xref-status");
+
+  function applyLookupToUI(lookup) {
+    var perCode = {};
+    document.querySelectorAll("tr[data-row-email]").forEach(function (tr) {
+      var email = tr.dataset.rowEmail || "";
+      var hit = !!lookup[email];
+      var cell = tr.querySelector('[data-role="row-entra"]');
+      if (cell) {
+        cell.className = "badge " + (hit ? "badge-ready" : "badge-missing");
+        cell.textContent = hit ? "in tenant" : "not in tenant";
+      }
+      var d = tr.closest("details.franchisee");
+      if (!d) return;
+      var code = d.dataset.code;
+      var bucket = perCode[code] || (perCode[code] = { in_t: 0, miss: 0 });
+      bucket[hit ? "in_t" : "miss"] += 1;
+    });
+    Object.keys(perCode).forEach(function (code) {
+      var s = perCode[code];
+      var ib = document.querySelector('[data-role="in-tenant-badge"][data-code="' + code + '"]');
+      var mb = document.querySelector('[data-role="missing-badge"][data-code="' + code + '"]');
+      if (ib) { ib.textContent = s.in_t + " in tenant"; ib.hidden = false; }
+      if (mb) {
+        mb.textContent = s.miss + " not in tenant";
+        mb.hidden = s.miss === 0;
+      }
+    });
+  }
+
+  xrefBtn.addEventListener("click", function () {
+    xrefBtn.disabled = true;
+    var orig = xrefBtn.innerHTML;
+    xrefBtn.innerHTML = '<span class="spinner spinner-sm"></span> Checking…';
+    kfcStream(
+      {{ url_for('main.report_cross_reference', upload_id=upload_id) | tojson }},
+      { method: "POST" },
+      function (ev) {
+        if (ev.type === "start") {
+          xrefStatus.textContent = "Checking 0 of " + ev.total + " email(s)…";
+        } else if (ev.type === "progress") {
+          xrefStatus.innerHTML = "Checking <b>" + ev.current + "</b> of <b>" + ev.total +
+            "</b> &middot; in tenant: <b>" + ev.in_tenant +
+            "</b> &middot; not in tenant: <b>" + ev.missing + "</b>";
+        } else if (ev.type === "done") {
+          xrefStatus.innerHTML = "<b>" + ev.in_tenant + "</b> in tenant, " +
+            "<b>" + ev.missing + "</b> not in tenant. Cached &mdash; apply will skip the resolve phase.";
+          fetch({{ url_for('main.report_lookup_json', upload_id=upload_id) | tojson }},
+                { credentials: "same-origin" })
+            .then(function (r) { return r.json(); })
+            .then(function (data) { applyLookupToUI(data.lookup || {}); })
+            .catch(function () { /* badges stay closed; apply still works */ })
+            .finally(function () {
+              xrefBtn.disabled = false;
+              xrefBtn.innerHTML = "&#x21bb; Re-check";
+            });
+        } else if (ev.type === "error") {
+          xrefStatus.textContent = "Cross-reference failed: " + ev.message;
+          xrefBtn.disabled = false;
+          xrefBtn.innerHTML = orig;
+        }
+      }
+    ).catch(function (err) {
+      xrefStatus.textContent = "Cross-reference failed: " + err.message;
+      xrefBtn.disabled = false;
+      xrefBtn.innerHTML = orig;
     });
   });
 })();

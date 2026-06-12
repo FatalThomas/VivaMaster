@@ -38,6 +38,7 @@ from .bulk import (
     iter_apply_mappings,
     iter_bulk_offboard,
     iter_convert_to_member,
+    iter_cross_reference,
     parse_offboard_emails,
 )
 from .graph_client import GraphClient, GraphError
@@ -193,6 +194,46 @@ def _load_upload(token: str) -> list[EmployeeRow] | None:
     if raw is None:
         return None
     return [EmployeeRow.from_dict(d) for d in raw]
+
+
+# Per-upload email -> user_id lookup, populated by the preview's "Check
+# against tenant" button. Apply routes prefer this over re-querying Graph
+# so the resolve phase isn't repeated. Persisted alongside the upload
+# json so closing the app between preview and apply doesn't lose it.
+_LOOKUPS_STORE: OrderedDict[str, dict[str, str | None]] = OrderedDict()
+
+
+def _lookup_path(token: str):
+    return _uploads_dir() / f"{token}.lookup.json"
+
+
+def _stash_lookup(token: str, lookup: dict[str, str | None]) -> None:
+    _LOOKUPS_STORE[token] = lookup
+    while len(_LOOKUPS_STORE) > _UPLOAD_STORE_MAX:
+        _LOOKUPS_STORE.popitem(last=False)
+    try:
+        with open(_lookup_path(token), "w", encoding="utf-8") as fh:
+            json.dump(lookup, fh)
+    except OSError:
+        pass
+
+
+def _load_lookup(token: str) -> dict[str, str | None]:
+    """Return the cached email lookup or an empty dict if none stashed."""
+    cached = _LOOKUPS_STORE.get(token or "")
+    if cached is not None:
+        return cached
+    if not token:
+        return {}
+    try:
+        with open(_lookup_path(token), encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            _LOOKUPS_STORE[token] = data
+            return data
+    except (OSError, ValueError):
+        pass
+    return {}
 
 
 def _sse_response(events) -> Response:
@@ -650,6 +691,7 @@ def report_apply_stream():
     if delete_missing and not remove_missing:
         delete_missing = False
     client = GraphClient(get_access_token())
+    cached_lookup = _load_lookup(upload_id) or None
     return _sse_response(
         iter_apply_mappings(
             client, rows,
@@ -657,8 +699,58 @@ def report_apply_stream():
             include_unknown=include_unknown,
             remove_missing=remove_missing,
             delete_missing=delete_missing,
+            email_lookup=cached_lookup,
         )
     )
+
+
+@main_bp.route("/report/preview/<upload_id>/lookup")
+@login_required
+def report_lookup_json(upload_id: str):
+    """Return the cached email->user_id map so the preview can update
+    per-row badges after the cross-reference SSE completes."""
+    lookup = _load_lookup(upload_id)
+    # Normalise to email-lowercase boolean for the client: emails are
+    # case-insensitive in Entra, and the row's data attribute is lowercased
+    # too, so the client matches without re-normalising.
+    return jsonify({
+        "lookup": {
+            (e or "").lower(): bool(uid)
+            for e, uid in lookup.items()
+        }
+    })
+
+
+@main_bp.route("/report/preview/<upload_id>/cross-reference", methods=["POST"])
+@login_required
+def report_cross_reference(upload_id: str):
+    """SSE: cross-reference every report email against the tenant.
+
+    The Yammer ID column in the report only flips to a UUID once a user
+    activates Viva Engage, so trusting it for "is in Entra" would mark
+    pre-invited guests as missing. This route walks the unique emails
+    instead, batched 20 at a time via Graph $batch, and stashes the
+    {email: user_id|None} map alongside the upload so the apply step
+    can re-use it without another lookup pass.
+    """
+    rows = _load_upload(upload_id)
+    if rows is None:
+        return _sse_response(
+            [{"type": "error",
+              "message": "Upload expired or not found - please re-upload the report."}]
+        )
+    emails = [(r.email or "").strip() for r in rows if (r.email or "").strip()]
+    client = GraphClient(get_access_token())
+
+    # Reuse anything we've already looked up so re-running the check is cheap.
+    lookup = dict(_load_lookup(upload_id))
+    fresh_emails = [e for e in emails if e not in lookup]
+
+    def stream():
+        yield from iter_cross_reference(client, fresh_emails, lookup)
+        _stash_lookup(upload_id, lookup)
+
+    return _sse_response(stream())
 
 
 # ---------- store mode preview & apply ----------
@@ -776,6 +868,7 @@ def report_apply_stores_stream():
             save_store_mapping(store, gid, gname)
 
     client = GraphClient(get_access_token())
+    cached_lookup = _load_lookup(upload_id) or None
     return _sse_response(
         iter_apply_mappings(
             client, rows,
@@ -785,6 +878,7 @@ def report_apply_stores_stream():
             delete_missing=delete_missing,
             grouping="store",
             promote_community_admins=promote_community_admins,
+            email_lookup=cached_lookup,
         )
     )
 
