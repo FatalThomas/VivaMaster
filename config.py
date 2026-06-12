@@ -1,12 +1,18 @@
 """Configuration loader. Reads from environment variables (and `.env` if present).
 
-Zero-config by default: the app signs in as the user via Microsoft's
-pre-consented first-party "Microsoft Azure CLI" public client with the
-OAuth 2.0 device code flow. The user types a short code into
-microsoft.com/devicelogin - no redirect URIs, no app registration, no
-admin consent. Effective access is whatever the signed-in user's own
-Entra roles allow. Set CLIENT_ID/TENANT_ID to use your own app
-registration instead.
+Zero-config by default: the app signs in as the user via KFC's own
+public-client Entra app registration with the OAuth 2.0 device code
+flow. The user types a short code into microsoft.com/devicelogin and
+consents once - no admin consent needed, just the delegated permissions
+on the app registration:
+
+  - Directory.AccessAsUser.All (users + groups)
+  - Files.ReadWrite            (mapping sync to OneDrive)
+  - Sites.ReadWrite.All        (mapping sync to Teams / SharePoint)
+
+Effective directory access is the intersection of those scopes and the
+signed-in user's own Entra roles. Set CLIENT_ID / TENANT_ID env vars
+(or kfc_entra/app_config.json) to point at a different app registration.
 """
 from __future__ import annotations
 
@@ -19,10 +25,11 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-# Microsoft's first-party "Microsoft Azure CLI" public client. Pre-authorized
-# in every tenant for delegated Graph access as the signed-in user, so no
-# consent prompt is ever shown. Conditional Access policies still apply.
-AZURE_CLI_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+# KFC's public-client Entra app registration. Lives in KFC's tenant, so
+# only KFC accounts can sign in. Has all three delegated Graph scopes
+# pre-registered with user-level consent - the user sees one consent
+# screen on first sign-in, never again.
+KFC_APP_CLIENT_ID = "6ae76fa1-f2c9-4b64-b7af-1d0fb59ce17d"
 
 
 @dataclass(frozen=True)
@@ -32,9 +39,6 @@ class Config:
     flask_secret_key: str
     invite_redirect_url: str
     port: int
-    # True when the user pasted their own Azure AD app's Client ID in
-    # Settings (or via the CLIENT_ID env var). Drives the scope list.
-    is_custom_client: bool = False
 
     @property
     def authority(self) -> str:
@@ -42,26 +46,17 @@ class Config:
 
     @property
     def scopes(self) -> list[str]:
-        # Delegated "act as the signed-in user" permissions. Effective access
-        # is the intersection of these scopes and the user's own Entra roles
-        # (Guest Inviter, User Administrator, Groups Administrator, ...).
-        #
-        # Default (Azure CLI client): just Directory.AccessAsUser.All, the
-        # only Graph scope Microsoft pre-authorizes for that public client.
-        # Asking for Files.ReadWrite / Sites.ReadWrite.All on the Azure CLI
-        # client fails with AADSTS65002.
-        #
-        # Custom client: the user has registered their own Azure AD app and
-        # ticked the file scopes there, so we can request all three at
-        # sign-in - which is what unlocks the OneDrive / SharePoint cloud
-        # sync of the mapping files.
-        if self.is_custom_client:
-            return [
-                "Directory.AccessAsUser.All",
-                "Files.ReadWrite",
-                "Sites.ReadWrite.All",
-            ]
-        return ["Directory.AccessAsUser.All"]
+        # Delegated "act as the signed-in user" permissions, all three
+        # pre-registered on the KFC app and user-consentable. Effective
+        # directory access is the intersection of Directory.AccessAsUser.All
+        # and the signed-in user's own Entra roles (Guest Inviter, User
+        # Administrator, Groups Administrator, ...). The two file scopes
+        # unlock the OneDrive / SharePoint cloud sync of mapping files.
+        return [
+            "Directory.AccessAsUser.All",
+            "Files.ReadWrite",
+            "Sites.ReadWrite.All",
+        ]
 
 
 def load_config() -> Config:
@@ -79,7 +74,7 @@ def load_config() -> Config:
     client_id = (
         os.environ.get("CLIENT_ID", "").strip()
         or file_cfg.get("client_id", "")
-        or AZURE_CLI_CLIENT_ID
+        or KFC_APP_CLIENT_ID
     )
     tenant_id = (
         os.environ.get("TENANT_ID", "").strip()
@@ -98,5 +93,4 @@ def load_config() -> Config:
             "INVITE_REDIRECT_URL", "https://myapps.microsoft.com"
         ),
         port=int(os.environ.get("PORT", "5000")),
-        is_custom_client=client_id != AZURE_CLI_CLIENT_ID,
     )

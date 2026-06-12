@@ -42,7 +42,6 @@ from .bulk import (
     parse_offboard_emails,
 )
 from .graph_client import GraphClient, GraphError
-from . import app_config as app_config_store
 from . import cloud_mappings
 from .mappings import (
     delete_mapping,
@@ -1105,14 +1104,9 @@ def _cloud_push_silent(client: GraphClient | None = None) -> None:
     """Best-effort: push local mappings to the cloud after a save/delete.
 
     Never raises - failures land in cloud_settings.last_error so the
-    Settings page can surface them next time. No-ops when the active
-    Azure AD client is the default Azure CLI one (no Files / Sites
-    scopes available there).
+    Settings page can surface them next time.
     """
     if not cloud_mappings.is_enabled():
-        return
-    cfg = current_app.config["KFC_CONFIG"]
-    if not cfg.is_custom_client:
         return
     try:
         if client is None:
@@ -1126,8 +1120,7 @@ def _cloud_push_silent(client: GraphClient | None = None) -> None:
 @login_required
 def report_mappings():
     sync_warning = None
-    cfg = current_app.config["KFC_CONFIG"]
-    if cloud_mappings.is_enabled() and cfg.is_custom_client:
+    if cloud_mappings.is_enabled():
         try:
             client = GraphClient(get_access_token())
             _settings, fz_added, store_added = cloud_mappings.pull_all(client)
@@ -1211,10 +1204,9 @@ def report_mappings_delete(code: str):
 @login_required
 def settings_page():
     settings = cloud_mappings.load_settings()
-    app_cfg_saved = app_config_store.load()
     cfg = current_app.config["KFC_CONFIG"]
     me = None
-    if settings.get("enabled") and cfg.is_custom_client:
+    if settings.get("enabled"):
         try:
             client = GraphClient(get_access_token())
             me = client.me()
@@ -1224,51 +1216,11 @@ def settings_page():
         "settings.html",
         user=current_user(),
         cloud_settings=settings,
-        app_cfg=app_cfg_saved,
-        is_custom_client=cfg.is_custom_client,
         active_client_id=cfg.client_id,
         active_tenant_id=cfg.tenant_id,
         me=me,
         local_dir=str(cloud_mappings.config_dir()),
     )
-
-
-@main_bp.route("/settings/app-config", methods=["POST"])
-@login_required
-def settings_app_config_save():
-    client_id = (request.form.get("client_id") or "").strip()
-    tenant_id = (request.form.get("tenant_id") or "").strip()
-    if not client_id:
-        flash("Paste your app registration's Client ID first.", "error")
-        return redirect(url_for("main.settings_page"))
-    # Light validation - GUIDs are 36 chars with hyphens.
-    if len(client_id) != 36 or client_id.count("-") != 4:
-        flash("That doesn't look like a Client ID (expected a GUID like "
-              "11111111-2222-3333-4444-555555555555).", "error")
-        return redirect(url_for("main.settings_page"))
-    app_config_store.save(client_id, tenant_id)
-    # Forget the current session so the new client_id is used at the
-    # next sign-in - no half-state with the old token cache lingering.
-    clear_session()
-    flash(
-        "Saved. Close the app and reopen it - sign-in will use your "
-        "registered app and ask for the OneDrive / SharePoint permissions.",
-        "success",
-    )
-    return redirect(url_for("main.settings_page"))
-
-
-@main_bp.route("/settings/app-config/clear", methods=["POST"])
-@login_required
-def settings_app_config_clear():
-    app_config_store.clear()
-    clear_session()
-    flash(
-        "Reverted to the default Microsoft Azure CLI sign-in. Close the "
-        "app and reopen it. Cloud sync is now disabled.",
-        "success",
-    )
-    return redirect(url_for("main.settings_page"))
 
 
 @main_bp.route("/settings/save", methods=["POST"])

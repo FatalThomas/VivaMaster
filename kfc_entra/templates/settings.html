@@ -6,119 +6,18 @@
     <h1>Settings</h1>
   </div>
 
-  <h2>Sign-in &middot; Azure AD app registration</h2>
-  <p class="muted">
-    By default the app signs you in using Microsoft&rsquo;s pre-authed
-    &ldquo;Microsoft Azure CLI&rdquo; public client &mdash; zero setup, but
-    it&rsquo;s only allowed to ask for <code>Directory.AccessAsUser.All</code>.
-    For cloud-syncing the mapping files to OneDrive / a Teams SharePoint site,
-    we need <code>Files.ReadWrite</code> and <code>Sites.ReadWrite.All</code>,
-    which Microsoft hasn&rsquo;t pre-authorised on that client. Register your
-    own Azure AD app once and paste the Client ID below to unlock it.
-  </p>
-
-  <details class="setup-steps" {% if not is_custom_client %}open{% endif %}>
-    <summary><b>One-time setup &mdash; create the app registration</b></summary>
-    <ol class="setup-list">
-      <li>
-        Open the
-        <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
-           target="_blank" rel="noopener">Entra admin centre &rarr; App registrations</a>
-        and click <b>New registration</b>.
-      </li>
-      <li>
-        Name it <code>KFC Entra User Manager</code>.
-        Supported account types &rarr; <b>Accounts in this organisational
-        directory only</b>. Leave the redirect URI blank.
-      </li>
-      <li>
-        Open <b>Authentication</b> &rarr; under <b>Advanced settings</b>
-        set <b>Allow public client flows</b> to <b>Yes</b>, then <b>Save</b>.
-      </li>
-      <li>
-        Open <b>API permissions</b> &rarr; <b>Add a permission</b> &rarr;
-        <b>Microsoft Graph</b> &rarr; <b>Delegated permissions</b> &rarr; tick:
-        <ul>
-          <li><code>Directory.AccessAsUser.All</code></li>
-          <li><code>Files.ReadWrite</code></li>
-          <li><code>Sites.ReadWrite.All</code></li>
-        </ul>
-        Click <b>Add permissions</b>. (Admin consent isn&rsquo;t required for
-        these &mdash; you&rsquo;ll see one consent prompt at next sign-in.)
-      </li>
-      <li>
-        Copy the <b>Application (client) ID</b> from the overview page and
-        paste it below.
-      </li>
-    </ol>
-  </details>
-
-  <form method="post" action="{{ url_for('main.settings_app_config_save') }}" class="settings-form">
-    <label class="field">
-      <span>Application (client) ID
-        <small>(GUID, e.g. 11111111-2222-3333-4444-555555555555)</small></span>
-      <input type="text" name="client_id" autocomplete="off"
-             placeholder="paste from Entra portal"
-             value="{{ app_cfg.client_id or '' }}">
-    </label>
-    <label class="field">
-      <span>Tenant ID
-        <small>(optional &mdash; leave blank to let any organisation tenant sign in)</small></span>
-      <input type="text" name="tenant_id" autocomplete="off"
-             placeholder="optional"
-             value="{{ app_cfg.tenant_id or '' }}">
-    </label>
-    <div class="settings-actions">
-      <button type="submit" class="btn btn-primary">Save &amp; restart</button>
-      {% if is_custom_client %}
-        <button type="submit" class="btn btn-secondary"
-                formaction="{{ url_for('main.settings_app_config_clear') }}">
-          Use the default Azure CLI client instead
-        </button>
-      {% endif %}
-    </div>
-  </form>
-
-  <table class="users-table compact-table">
-    <tbody>
-      <tr>
-        <th>Active client_id</th>
-        <td class="mono">{{ active_client_id }}
-          {% if is_custom_client %}
-            <span class="badge badge-ready">custom</span>
-          {% else %}
-            <span class="badge badge-skip">default Azure CLI</span>
-          {% endif %}
-        </td>
-      </tr>
-      <tr>
-        <th>Active tenant</th>
-        <td class="mono">{{ active_tenant_id }}</td>
-      </tr>
-      {% if app_cfg.updated_at %}
-      <tr><th>Saved at</th><td class="mono">{{ app_cfg.updated_at }}</td></tr>
-      {% endif %}
-    </tbody>
-  </table>
-
-  <hr style="margin: 24px 0;">
-
   <h2>Cloud-sync mappings</h2>
   <p class="muted">
     Push the Franchisee &amp; Store mapping files to Microsoft 365 so the same
     saved mappings show up on every device you sign in with. Pushes happen
-    automatically whenever you save or apply mappings.
+    automatically whenever you save or apply mappings; visiting
+    <a href="{{ url_for('main.report_mappings') }}">the mappings page</a>
+    pulls + merges anything new from the cloud.
+  </p>
+  <p class="muted">
     Local files are still the working copy &mdash; they live at
     <code>{{ local_dir }}</code> and keep working if sync is off or offline.
   </p>
-
-  {% if not is_custom_client %}
-    <div class="flash flash-warning">
-      Complete the Azure AD app registration above first &mdash; cloud sync
-      needs the <code>Files.ReadWrite</code> / <code>Sites.ReadWrite.All</code>
-      scopes that come with your own client_id.
-    </div>
-  {% endif %}
 
   {% if cloud_settings.last_error %}
     <div class="flash flash-warning">
@@ -126,8 +25,7 @@
     </div>
   {% endif %}
 
-  <form method="post" action="{{ url_for('main.settings_save') }}" class="settings-form"
-        {% if not is_custom_client %}style="opacity: 0.55; pointer-events: none;"{% endif %}>
+  <form method="post" action="{{ url_for('main.settings_save') }}" class="settings-form">
     <label class="checkbox">
       <input type="checkbox" name="enabled" id="cloud-enabled"
              {% if cloud_settings.enabled %}checked{% endif %}>
@@ -177,7 +75,7 @@
 
     <div class="settings-actions">
       <button type="submit" class="btn btn-primary">Save settings</button>
-      {% if cloud_settings.enabled and is_custom_client %}
+      {% if cloud_settings.enabled %}
         <button type="submit" class="btn btn-secondary"
                 formaction="{{ url_for('main.settings_sync_now') }}">
           Sync now (pull + push)
@@ -186,7 +84,7 @@
     </div>
   </form>
 
-  {% if cloud_settings.enabled and is_custom_client %}
+  {% if cloud_settings.enabled %}
     <h3>Status</h3>
     <table class="users-table compact-table">
       <tbody>
@@ -224,6 +122,22 @@
       </tbody>
     </table>
   {% endif %}
+
+  <hr style="margin: 24px 0;">
+
+  <h2>Sign-in</h2>
+  <table class="users-table compact-table">
+    <tbody>
+      <tr>
+        <th>Client ID</th>
+        <td class="mono">{{ active_client_id }}</td>
+      </tr>
+      <tr>
+        <th>Tenant</th>
+        <td class="mono">{{ active_tenant_id }}</td>
+      </tr>
+    </tbody>
+  </table>
 </section>
 {% endblock %}
 
