@@ -1,18 +1,13 @@
 """Configuration loader. Reads from environment variables (and `.env` if present).
 
-Zero-config by default: the app signs in as the user via KFC's own
-public-client Entra app registration with the OAuth 2.0 device code
-flow. The user types a short code into microsoft.com/devicelogin and
-consents once - no admin consent needed, just the delegated permissions
-on the app registration:
-
-  - Directory.AccessAsUser.All (users + groups)
-  - Files.ReadWrite            (mapping sync to OneDrive)
-  - Sites.ReadWrite.All        (mapping sync to Teams / SharePoint)
-
-Effective directory access is the intersection of those scopes and the
-signed-in user's own Entra roles. Set CLIENT_ID / TENANT_ID env vars
-(or kfc_entra/app_config.json) to point at a different app registration.
+Zero-config by default: the app signs in as the user via Microsoft's
+pre-consented first-party "Microsoft Azure CLI" public client with the
+OAuth 2.0 device code flow. The user types a short code into
+microsoft.com/devicelogin - no redirect URIs, no app registration, no
+admin consent. Effective access is whatever the signed-in user's own
+Entra roles allow. Set CLIENT_ID/TENANT_ID env vars (or
+kfc_entra/app_config.json) to point at your own app registration if you
+need broader Graph scopes than Directory.AccessAsUser.All.
 """
 from __future__ import annotations
 
@@ -25,16 +20,10 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-# KFC's public-client Entra app registration. Lives in KFC's tenant, so
-# only KFC accounts can sign in. Has all three delegated Graph scopes
-# pre-registered with user-level consent - the user sees one consent
-# screen on first sign-in, never again.
-KFC_APP_CLIENT_ID = "6ae76fa1-f2c9-4b64-b7af-1d0fb59ce17d"
-
-# KFC's Entra tenant ID (yumau.onmicrosoft.com). Required because the app
-# registration is single-tenant - using "organizations" or "common" as the
-# authority would 401 with AADSTS50059 "no tenant-identifying information".
-KFC_TENANT_ID = "a48b58d3-4ae6-4310-bd85-016f3555e958"
+# Microsoft's first-party "Microsoft Azure CLI" public client. Pre-authorized
+# in every tenant for delegated Graph access as the signed-in user, so no
+# consent prompt is ever shown. Conditional Access policies still apply.
+AZURE_CLI_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
 
 
 @dataclass(frozen=True)
@@ -82,12 +71,15 @@ def load_config() -> Config:
     client_id = (
         os.environ.get("CLIENT_ID", "").strip()
         or file_cfg.get("client_id", "")
-        or KFC_APP_CLIENT_ID
+        or AZURE_CLI_CLIENT_ID
     )
+    # "organizations" lets any work/school tenant sign in - which is fine
+    # because the Azure CLI client is multi-tenant and pre-authed in all of
+    # them. Pin TENANT_ID if you switch to a single-tenant custom app.
     tenant_id = (
         os.environ.get("TENANT_ID", "").strip()
         or file_cfg.get("tenant_id", "")
-        or KFC_TENANT_ID
+        or "organizations"
     )
 
     return Config(

@@ -84,17 +84,10 @@ def _purge_expired_unlocked() -> None:
 
 
 def _flow_info(flow_id: str, flow: dict) -> dict:
-    # MSAL hands us the generic https://microsoft.com/devicelogin URL.
-    # That redirects to /common/wrongplace whenever the user's browser
-    # is already signed into a Microsoft account that doesn't belong to
-    # our app's tenant - which the user almost always is (work account,
-    # personal Outlook, leftover session). Build the tenant-scoped
-    # device-auth URL ourselves so the page locks to the right tenant
-    # from the first hop and ignores other sessions.
-    cfg = current_app.config["KFC_CONFIG"]
-    verification_uri = (
-        f"https://login.microsoftonline.com/{cfg.tenant_id}/oauth2/deviceauth"
-    )
+    # Use whatever MSAL gives us. The generic microsoft.com/devicelogin URL
+    # works for the Azure CLI multi-tenant client because the device-flow
+    # endpoint figures out the tenant from the code itself.
+    verification_uri = flow.get("verification_uri", "https://microsoft.com/devicelogin")
     user_code = flow["user_code"]
     return {
         "flow_id": flow_id,
