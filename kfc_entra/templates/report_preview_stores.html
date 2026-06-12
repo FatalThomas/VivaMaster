@@ -152,6 +152,18 @@
     });
   });
 
+  var KIND_CLASSES = ["kind-exact", "kind-saved", "kind-create", "kind-skip", "kind-suggestion"];
+  function paintKind(sel) {
+    var opt = sel.options[sel.selectedIndex];
+    var kind = (opt && opt.dataset.kind) || "";
+    KIND_CLASSES.forEach(function (c) { sel.classList.remove(c); });
+    if (kind) sel.classList.add("kind-" + kind);
+  }
+  document.querySelectorAll(".store-select").forEach(function (sel) {
+    paintKind(sel);
+    sel.addEventListener("change", function () { paintKind(sel); });
+  });
+
   function buildAssignments() {
     var out = {};
     document.querySelectorAll(".store-select").forEach(function (sel) {

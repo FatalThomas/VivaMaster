@@ -834,6 +834,28 @@ a:hover { text-decoration: underline; }
 }
 .store-select:focus { outline: 2px solid var(--kfc-red); outline-offset: 1px; }
 .store-select:disabled { background: var(--bg); cursor: not-allowed; }
+
+/* Selected-option colour cue: the <select> background changes so a glance
+   down the list tells you which Stores will create vs. land on an existing
+   group vs. get skipped. */
+.store-select.kind-exact      { background: #d6f5e0; border-color: #6abf86; }
+.store-select.kind-saved      { background: #d6f5e0; border-color: #6abf86; }
+.store-select.kind-create     { background: #fff6cc; border-color: #d6b54a; }
+.store-select.kind-skip       { background: #ececec; border-color: #c0c0c0; color: var(--muted); }
+.store-select.kind-suggestion { background: #fde7c8; border-color: #e3a35a; }
+.store-select.kind-exact:disabled,
+.store-select.kind-saved:disabled,
+.store-select.kind-create:disabled,
+.store-select.kind-skip:disabled,
+.store-select.kind-suggestion:disabled { background: var(--bg); }
+
+/* Match the dropdown list itself - Chromium (and so WebView2) honours
+   option backgrounds, which makes the list itself scannable too. */
+.store-select option[data-kind=exact]      { background: #d6f5e0; }
+.store-select option[data-kind=saved]      { background: #d6f5e0; }
+.store-select option[data-kind=create]     { background: #fff6cc; }
+.store-select option[data-kind=skip]       { background: #ececec; color: #777; }
+.store-select option[data-kind=suggestion] { background: #fde7c8; }
 .badge-admin { background: #e7e2fb; color: #5727b8; }
 .badge-ready { background: #d6f5e0; color: var(--ok); }
 .badge-missing { background: #fde7c8; color: var(--warn); }
