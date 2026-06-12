@@ -382,6 +382,36 @@ def update_display_name(user_id: str):
     return redirect(url_for("main.users_list"))
 
 
+# ---------- per-user group memberships (lazy-loaded by the Users page) ----
+@main_bp.route("/users/<user_id>/groups")
+@login_required
+def user_groups_json(user_id: str):
+    """Return the groups this user is a member of, as JSON."""
+    client = GraphClient(get_access_token())
+    try:
+        groups = client.list_user_groups(user_id)
+    except GraphError as exc:
+        return jsonify({"error": exc.message}), 502
+    return jsonify({
+        "groups": sorted(
+            [{"id": g.id, "name": g.display_name} for g in groups],
+            key=lambda g: (g["name"] or "").lower(),
+        )
+    })
+
+
+@main_bp.route("/users/<user_id>/groups/<group_id>/remove", methods=["POST"])
+@login_required
+def user_group_remove(user_id: str, group_id: str):
+    """Remove the user from one group. Idempotent: 'not in group' is success."""
+    client = GraphClient(get_access_token())
+    try:
+        outcome = client.remove_member_from_group(group_id, user_id)
+    except GraphError as exc:
+        return jsonify({"error": exc.message}), 502
+    return jsonify({"status": outcome})
+
+
 # ---------- self-update ----------
 # No @login_required: this touches the local exe, not Microsoft Graph, and
 # must work from the sign-in page too. The app only listens on 127.0.0.1.

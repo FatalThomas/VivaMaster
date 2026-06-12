@@ -76,11 +76,23 @@
         </td>
         <td>{{ 'Yes' if u.account_enabled else 'No' }}</td>
         <td class="actions-col">
-          {% if u.user_type == 'Guest' %}
-            <form method="post" action="{{ url_for('main.convert_to_member', user_id=u.id) }}">
-              <button type="submit" class="btn btn-tiny btn-primary">Make Member</button>
-            </form>
-          {% endif %}
+          <div class="row-actions">
+            {% if u.user_type == 'Guest' %}
+              <form method="post" action="{{ url_for('main.convert_to_member', user_id=u.id) }}">
+                <button type="submit" class="btn btn-tiny btn-primary">Make Member</button>
+              </form>
+            {% endif %}
+            <button type="button"
+                    class="btn btn-tiny btn-secondary user-groups-toggle"
+                    data-user-id="{{ u.id }}"
+                    data-user-label="{{ u.mail or u.user_principal_name }}"
+                    title="Show this user's group memberships">Groups</button>
+          </div>
+        </td>
+      </tr>
+      <tr class="user-groups-row" data-user-id="{{ u.id }}" hidden>
+        <td colspan="6">
+          <div class="user-groups-panel">Loading&hellip;</div>
         </td>
       </tr>
       {% endfor %}
@@ -264,6 +276,89 @@
           }
         },
       });
+    });
+  });
+
+  /* ---- per-user groups: lazy-load on click + remove with confirm ---- */
+  var loadedFor = {};
+
+  function renderGroups(panel, userId, label, groups) {
+    if (!groups.length) {
+      panel.innerHTML = '<em class="muted">' + escapeHtml(label) + ' is not a member of any groups.</em>';
+      return;
+    }
+    var parts = ['<div class="user-groups-list">'];
+    groups.forEach(function (g) {
+      parts.push(
+        '<span class="user-group-chip" data-group-id="' + escapeAttr(g.id) + '">' +
+          '<span class="user-group-name">' + escapeHtml(g.name) + '</span>' +
+          '<button type="button" class="user-group-remove" ' +
+            'title="Remove ' + escapeAttr(label) + ' from ' + escapeAttr(g.name) + '">&times;</button>' +
+        '</span>'
+      );
+    });
+    parts.push('</div>');
+    panel.innerHTML = parts.join("");
+    wireRemove(panel, userId, label);
+  }
+
+  function wireRemove(panel, userId, label) {
+    panel.querySelectorAll(".user-group-remove").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var chip = btn.closest(".user-group-chip");
+        var groupId = chip.dataset.groupId;
+        var groupName = chip.querySelector(".user-group-name").textContent;
+        var ok = confirm("Remove " + label + " from \"" + groupName + "\"?");
+        if (!ok) return;
+        btn.disabled = true;
+        chip.style.opacity = "0.5";
+        fetch("/users/" + encodeURIComponent(userId) + "/groups/" +
+              encodeURIComponent(groupId) + "/remove",
+              { method: "POST", credentials: "same-origin" })
+          .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+          .then(function (res) {
+            if (!res.ok) throw new Error(res.data.error || "Removal failed.");
+            chip.remove();
+            kfcToast("Removed from \"" + groupName + "\".", "success");
+          })
+          .catch(function (err) {
+            btn.disabled = false;
+            chip.style.opacity = "1";
+            kfcToast(err.message, "error");
+          });
+      });
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function escapeAttr(s) { return escapeHtml(s); }
+
+  document.querySelectorAll(".user-groups-toggle").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var userId = btn.dataset.userId;
+      var label = btn.dataset.userLabel;
+      var row = document.querySelector('.user-groups-row[data-user-id="' + userId + '"]');
+      if (!row) return;
+      if (!row.hidden) { row.hidden = true; return; }
+      row.hidden = false;
+      var panel = row.querySelector(".user-groups-panel");
+      if (loadedFor[userId]) return;
+      panel.innerHTML = '<span class="spinner spinner-sm"></span> Loading groups&hellip;';
+      fetch("/users/" + encodeURIComponent(userId) + "/groups",
+            { credentials: "same-origin" })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+        .then(function (res) {
+          if (!res.ok) throw new Error(res.data.error || "Failed to load groups.");
+          loadedFor[userId] = true;
+          renderGroups(panel, userId, label, res.data.groups || []);
+        })
+        .catch(function (err) {
+          panel.innerHTML = '<span class="muted">Couldn\'t load groups: ' + escapeHtml(err.message) + '</span>';
+        });
     });
   });
 })();

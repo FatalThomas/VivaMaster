@@ -410,3 +410,30 @@ class GraphClient:
             results.setdefault(uid, ("failed", "Graph $batch returned no response for this user."))
         return results
 
+    def list_user_groups(self, user_id: str) -> list[GraphGroup]:
+        """Return every group the user is a direct member of (paged).
+
+        Uses the `microsoft.graph.group` cast so directory roles and other
+        directory-object memberships are filtered out at the source.
+        """
+        params: dict[str, Any] = {
+            "$select": "id,displayName,description,mailNickname",
+            "$top": 999,
+        }
+        raw = self._collect_paged(
+            f"/users/{user_id}/memberOf/microsoft.graph.group",
+            params=params,
+        )
+        return [GraphGroup.from_api(g) for g in raw]
+
+    def remove_member_from_group(self, group_id: str, user_id: str) -> str:
+        """Remove one user from one group. Returns 'removed' or 'not_in_group'."""
+        try:
+            self._request("DELETE", f"/groups/{group_id}/members/{user_id}/$ref")
+            return "removed"
+        except GraphError as exc:
+            lower = (exc.message or "").lower()
+            if exc.status == 404 or "does not exist" in lower or "could not be found" in lower:
+                return "not_in_group"
+            raise
+
