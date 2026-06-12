@@ -9,15 +9,19 @@
   <h2>Cloud-sync mappings</h2>
   <p class="muted">
     Push the Franchisee &amp; Store mapping files to Microsoft 365 so the same
-    saved mappings show up on every device you sign in with. Pushes happen
-    automatically whenever you save or apply mappings; visiting
-    <a href="{{ url_for('main.report_mappings') }}">the mappings page</a>
-    pulls + merges anything new from the cloud.
+    saved mappings show up on every device you sign in with. Local files are
+    still the working copy &mdash; they live at <code>{{ local_dir }}</code>.
   </p>
-  <p class="muted">
-    Local files are still the working copy &mdash; they live at
-    <code>{{ local_dir }}</code> and keep working if sync is off or offline.
-  </p>
+
+  <div class="flash flash-warning">
+    <b>Needs admin consent on the app registration before this can be turned on.</b>
+    Cloud sync requires <code>Sites.ReadWrite.All</code> (and ideally
+    <code>Files.ReadWrite</code>), which the tenant won&rsquo;t hand to a user
+    on their own. Go to <b>Entra admin centre &rarr; App registrations &rarr;
+    KFC Entra User Manager &rarr; API permissions</b> and click <b>&ldquo;Grant
+    admin consent for Yum! Australia&rdquo;</b>. After that, a future release
+    will re-enable the toggle below.
+  </div>
 
   {% if cloud_settings.last_error %}
     <div class="flash flash-warning">
@@ -25,7 +29,8 @@
     </div>
   {% endif %}
 
-  <form method="post" action="{{ url_for('main.settings_save') }}" class="settings-form">
+  <form method="post" action="{{ url_for('main.settings_save') }}" class="settings-form"
+        style="opacity: 0.55; pointer-events: none;">
     <label class="checkbox">
       <input type="checkbox" name="enabled" id="cloud-enabled"
              {% if cloud_settings.enabled %}checked{% endif %}>

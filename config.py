@@ -51,17 +51,20 @@ class Config:
 
     @property
     def scopes(self) -> list[str]:
-        # Delegated "act as the signed-in user" permissions, all three
-        # pre-registered on the KFC app and user-consentable. Effective
-        # directory access is the intersection of Directory.AccessAsUser.All
-        # and the signed-in user's own Entra roles (Guest Inviter, User
-        # Administrator, Groups Administrator, ...). The two file scopes
-        # unlock the OneDrive / SharePoint cloud sync of mapping files.
-        return [
-            "Directory.AccessAsUser.All",
-            "Files.ReadWrite",
-            "Sites.ReadWrite.All",
-        ]
+        # Delegated "act as the signed-in user" permission. Sign-in stays
+        # one-click because the app registration already has admin consent
+        # for this scope. Effective directory access is its intersection
+        # with the signed-in user's own Entra roles.
+        #
+        # Cloud-sync scopes (Files.ReadWrite, Sites.ReadWrite.All) are NOT
+        # requested at sign-in because Sites.ReadWrite.All requires admin
+        # consent on the app registration and Files.ReadWrite often does
+        # too under tenant consent policies - and a missing grant 500s the
+        # whole device flow. Cloud sync re-acquires its own token using
+        # incremental consent once admin has clicked "Grant admin consent"
+        # on the app registration (not yet wired up; the Settings page
+        # surfaces the requirement).
+        return ["Directory.AccessAsUser.All"]
 
 
 def load_config() -> Config:
