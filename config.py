@@ -39,10 +39,19 @@ class Config:
 
     @property
     def scopes(self) -> list[str]:
-        # Delegated "act as the signed-in user" permission. Effective access
-        # is the intersection of this scope and the user's own Entra roles
+        # Delegated "act as the signed-in user" permissions. Effective access
+        # is the intersection of these scopes and the user's own Entra roles
         # (Guest Inviter, User Administrator, Groups Administrator, ...).
-        return ["Directory.AccessAsUser.All"]
+        # Files.ReadWrite + Sites.ReadWrite.All let us sync the Franchisee /
+        # Store mappings file to the user's OneDrive (or a SharePoint site)
+        # so the same machine-saved mappings show up on every device. Both
+        # are pre-authorized on the Azure CLI public client, so no admin
+        # consent prompt is shown.
+        return [
+            "Directory.AccessAsUser.All",
+            "Files.ReadWrite",
+            "Sites.ReadWrite.All",
+        ]
 
 
 def load_config() -> Config:

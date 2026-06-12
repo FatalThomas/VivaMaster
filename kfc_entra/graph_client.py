@@ -696,3 +696,73 @@ class GraphClient:
         """Soft-delete: set accountEnabled to false. User is preserved in Entra."""
         self.update_user(user_id, {"accountEnabled": False})
 
+    # ---------- file storage (OneDrive / SharePoint) ----------
+    def me(self) -> dict:
+        """Return the signed-in user object (id, displayName, mail, etc.)."""
+        return self._request("GET", "/me", params={"$select": "id,displayName,mail,userPrincipalName"}).json()
+
+    def get_file_text(self, drive_path: str) -> str | None:
+        """Read a small file from a Graph drive path. Returns None if missing.
+
+        drive_path is the full path under GRAPH_BASE, e.g.
+        /me/drive/root:/Apps/KFCEntraManager/mappings.json:/content
+        or /sites/{site-id}/drive/root:/Apps/KFCEntraManager/mappings.json:/content
+        """
+        try:
+            resp = self._request("GET", drive_path)
+        except GraphError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return resp.text
+
+    def put_file_text(self, drive_path: str, content: str) -> dict:
+        """Create or overwrite a file at the given drive path. Parent folders
+        in the path are created on demand by the upload endpoint."""
+        url = drive_path if drive_path.startswith("http") else f"{GRAPH_BASE}{drive_path}"
+        headers = dict(self._headers)
+        headers["Content-Type"] = "text/plain"
+        resp = requests.put(
+            url,
+            headers=headers,
+            data=content.encode("utf-8"),
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if resp.status_code >= 400:
+            try:
+                payload = resp.json()
+                message = payload.get("error", {}).get("message", resp.text)
+            except ValueError:
+                payload = None
+                message = resp.text
+            raise GraphError(resp.status_code, message, payload)
+        return resp.json()
+
+    def resolve_sharepoint_site(self, site_url: str) -> dict:
+        """Resolve a SharePoint site URL to its Graph site object.
+
+        Accepts forms like:
+          https://contoso.sharepoint.com/sites/KFC-Network
+          contoso.sharepoint.com:/sites/KFC-Network
+        Returns the {"id", "displayName", "webUrl", ...} site object.
+        """
+        from urllib.parse import urlparse
+        u = site_url.strip()
+        if u.startswith("http://") or u.startswith("https://"):
+            parsed = urlparse(u)
+            host = parsed.netloc
+            path = parsed.path.rstrip("/")
+        else:
+            # contoso.sharepoint.com:/sites/foo form
+            if ":/" in u:
+                host, path = u.split(":/", 1)
+                path = "/" + path.lstrip("/")
+            else:
+                host = u
+                path = ""
+        if not host:
+            raise GraphError(400, "Could not parse SharePoint site URL.")
+        path_segment = f":{path}" if path else ""
+        resp = self._request("GET", f"/sites/{host}{path_segment}")
+        return resp.json()
+

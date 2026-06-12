@@ -42,6 +42,7 @@ from .bulk import (
     parse_offboard_emails,
 )
 from .graph_client import GraphClient, GraphError
+from . import cloud_mappings
 from .mappings import (
     delete_mapping,
     delete_store_mapping,
@@ -692,8 +693,9 @@ def report_apply_stream():
         delete_missing = False
     client = GraphClient(get_access_token())
     cached_lookup = _load_lookup(upload_id) or None
-    return _sse_response(
-        iter_apply_mappings(
+
+    def stream():
+        yield from iter_apply_mappings(
             client, rows,
             assignments=assignments,
             include_unknown=include_unknown,
@@ -701,7 +703,12 @@ def report_apply_stream():
             delete_missing=delete_missing,
             email_lookup=cached_lookup,
         )
-    )
+        # iter_apply_mappings calls save_mapping() as Franchisee groups get
+        # resolved or created. Push the now-updated local file to the cloud
+        # so the next device sees them.
+        _cloud_push_silent(client)
+
+    return _sse_response(stream())
 
 
 @main_bp.route("/report/preview/<upload_id>/lookup")
@@ -861,13 +868,17 @@ def report_apply_stores_stream():
         delete_missing = False
 
     # Persist the chosen store mappings so the next upload remembers them.
+    saved_any = False
     for store, mapping in assignments.items():
         gid = (mapping.get("group_id") or "").strip()
         gname = (mapping.get("group_name") or "").strip()
         if gid and gname:
             save_store_mapping(store, gid, gname)
+            saved_any = True
 
     client = GraphClient(get_access_token())
+    if saved_any:
+        _cloud_push_silent(client)
     cached_lookup = _load_lookup(upload_id) or None
     return _sse_response(
         iter_apply_mappings(
@@ -1089,9 +1100,43 @@ def group_remove_owner(group_id: str, user_id: str):
 
 
 # ---------- mappings management ----------
+def _cloud_push_silent(client: GraphClient | None = None) -> None:
+    """Best-effort: push local mappings to the cloud after a save/delete.
+
+    Never raises - failures land in cloud_settings.last_error so the
+    Settings page can surface them next time.
+    """
+    if not cloud_mappings.is_enabled():
+        return
+    try:
+        if client is None:
+            client = GraphClient(get_access_token())
+        cloud_mappings.push_all(client)
+    except Exception:  # noqa: BLE001 - best-effort sync, never blocks save
+        pass
+
+
 @main_bp.route("/report/mappings")
 @login_required
 def report_mappings():
+    sync_warning = None
+    if cloud_mappings.is_enabled():
+        try:
+            client = GraphClient(get_access_token())
+            _settings, fz_added, store_added = cloud_mappings.pull_all(client)
+            if fz_added or store_added:
+                bits = []
+                if fz_added:
+                    bits.append(f"{fz_added} Franchisee")
+                if store_added:
+                    bits.append(f"{store_added} Store")
+                flash(
+                    "Pulled " + " and ".join(bits) + " mapping(s) from cloud.",
+                    "success",
+                )
+        except Exception as exc:  # noqa: BLE001
+            sync_warning = str(exc)
+
     saved = load_mappings()["mappings"]
     groups_json: list[dict] = []
     groups_error = None
@@ -1108,6 +1153,8 @@ def report_mappings():
         mappings=saved,
         groups_json=groups_json,
         groups_error=groups_error,
+        cloud_settings=cloud_mappings.load_settings(),
+        sync_warning=sync_warning,
     )
 
 
@@ -1123,6 +1170,7 @@ def report_mappings_save():
     if not group_id and not group_name:
         flash("Pick an existing group or type a new group name.", "error")
         return redirect(url_for("main.report_mappings"))
+    client: GraphClient | None = None
     if not group_id:
         # Creating the group now keeps the mapping store consistent: every
         # saved mapping always points at a real group id.
@@ -1136,6 +1184,7 @@ def report_mappings_save():
         flash(f"Created new Entra group '{group_name}'.", "success")
     save_mapping(code, group_id, group_name)
     flash(f"Mapping saved: {code} → {group_name}.", "success")
+    _cloud_push_silent(client)
     return redirect(url_for("main.report_mappings"))
 
 
@@ -1144,9 +1193,100 @@ def report_mappings_save():
 def report_mappings_delete(code: str):
     if delete_mapping(code):
         flash(f"Mapping for {code.upper()} deleted.", "success")
+        _cloud_push_silent()
     else:
         flash(f"No mapping found for {code.upper()}.", "warning")
     return redirect(url_for("main.report_mappings"))
+
+
+# ---------- settings (cloud-sync) -------------------------------------------
+@main_bp.route("/settings")
+@login_required
+def settings_page():
+    settings = cloud_mappings.load_settings()
+    me = None
+    if settings.get("enabled"):
+        try:
+            client = GraphClient(get_access_token())
+            me = client.me()
+        except Exception as exc:  # noqa: BLE001
+            me = {"error": str(exc)}
+    return render_template(
+        "settings.html",
+        user=current_user(),
+        cloud_settings=settings,
+        me=me,
+        local_dir=str(cloud_mappings.config_dir()),
+    )
+
+
+@main_bp.route("/settings/save", methods=["POST"])
+@login_required
+def settings_save():
+    enabled = request.form.get("enabled") == "on"
+    destination = (request.form.get("destination") or "onedrive").strip().lower()
+    site_url = (request.form.get("sharepoint_site_url") or "").strip()
+    fields: dict = {"enabled": enabled, "destination": destination}
+
+    if destination == "sharepoint":
+        if not site_url:
+            flash("Pick OneDrive, or enter a SharePoint site URL.", "error")
+            return redirect(url_for("main.settings_page"))
+        try:
+            client = GraphClient(get_access_token())
+            site = client.resolve_sharepoint_site(site_url)
+        except GraphError as exc:
+            flash(f"Could not resolve SharePoint site: {exc.message}", "error")
+            return redirect(url_for("main.settings_page"))
+        fields["sharepoint_site_url"] = site_url
+        fields["sharepoint_site_id"] = site.get("id") or ""
+        fields["sharepoint_site_name"] = site.get("displayName") or site.get("name") or ""
+    else:
+        fields["sharepoint_site_url"] = ""
+        fields["sharepoint_site_id"] = ""
+        fields["sharepoint_site_name"] = ""
+
+    cloud_mappings.save_settings(fields)
+
+    # If sync was just turned on, do an initial push so the cloud has the
+    # current local mappings to merge against on the next device.
+    if enabled:
+        try:
+            client = GraphClient(get_access_token())
+            cloud_mappings.push_all(client)
+            flash("Cloud sync turned on. Local mappings pushed.", "success")
+        except Exception as exc:  # noqa: BLE001
+            flash(f"Saved settings, but initial push failed: {exc}", "warning")
+    else:
+        flash("Cloud sync turned off. Local mappings are unchanged.", "success")
+
+    return redirect(url_for("main.settings_page"))
+
+
+@main_bp.route("/settings/sync-now", methods=["POST"])
+@login_required
+def settings_sync_now():
+    """Manual two-way sync: pull, merge, push."""
+    if not cloud_mappings.is_enabled():
+        flash("Cloud sync is off. Turn it on first.", "warning")
+        return redirect(url_for("main.settings_page"))
+    try:
+        client = GraphClient(get_access_token())
+        _settings, fz_added, store_added = cloud_mappings.pull_all(client)
+        cloud_mappings.push_all(client)
+    except Exception as exc:  # noqa: BLE001
+        flash(f"Sync failed: {exc}", "error")
+        return redirect(url_for("main.settings_page"))
+    bits = []
+    if fz_added:
+        bits.append(f"{fz_added} Franchisee")
+    if store_added:
+        bits.append(f"{store_added} Store")
+    if bits:
+        flash("Pulled " + " and ".join(bits) + " mapping(s) from cloud, then pushed local back.", "success")
+    else:
+        flash("Synced. No remote changes to merge in; local pushed.", "success")
+    return redirect(url_for("main.settings_page"))
 
 
 # ============================================================================
