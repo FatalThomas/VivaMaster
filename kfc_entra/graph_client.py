@@ -493,6 +493,59 @@ class GraphClient:
                 return "not_an_owner"
             raise
 
+    def batch_count_group_owners(self, group_ids: list[str]) -> dict[str, int]:
+        """Return {group_id: owner_count} for up to 20 groups in one $batch.
+
+        Used by the Groups page to drive the "has admins" filter without
+        listing every owner of every group. Each sub-request hits
+        /groups/{id}/owners/$count with ConsistencyLevel: eventual; the
+        response body for that endpoint is a plain integer, which we
+        parse out of the $batch wrapper.
+        """
+        if not group_ids:
+            return {}
+        if len(group_ids) > 20:
+            raise ValueError("Microsoft Graph $batch is limited to 20 requests.")
+
+        requests_body = [
+            {
+                "id": str(idx),
+                "method": "GET",
+                "url": f"/groups/{gid}/owners/$count",
+                "headers": {"ConsistencyLevel": "eventual"},
+            }
+            for idx, gid in enumerate(group_ids)
+        ]
+        resp = self._request("POST", "/$batch", json={"requests": requests_body})
+        results: dict[str, int] = {}
+        for entry in resp.json().get("responses") or []:
+            try:
+                idx = int(entry.get("id", -1))
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= idx < len(group_ids):
+                continue
+            gid = group_ids[idx]
+            status = entry.get("status", 500)
+            if not 200 <= status < 300:
+                results[gid] = 0
+                continue
+            body = entry.get("body")
+            try:
+                results[gid] = int(body) if body is not None else 0
+            except (TypeError, ValueError):
+                # Some Graph builds wrap the count in {"value": N}.
+                if isinstance(body, dict) and "value" in body:
+                    try:
+                        results[gid] = int(body["value"])
+                    except (TypeError, ValueError):
+                        results[gid] = 0
+                else:
+                    results[gid] = 0
+        for gid in group_ids:
+            results.setdefault(gid, 0)
+        return results
+
 
         """Return every group the user is a direct member of (paged).
 

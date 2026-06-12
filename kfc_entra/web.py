@@ -101,6 +101,48 @@ def _users_cache_clear(sid: str) -> None:
         _USERS_CACHE.pop(key, None)
 
 
+# Cached Entra group list + owner-count map for the Groups page. Same
+# 90-second TTL pattern as users.
+_GROUPS_CACHE: dict[str, tuple[float, list]] = {}
+_OWNER_COUNTS_CACHE: dict[str, tuple[float, dict[str, int]]] = {}
+_GROUPS_CACHE_TTL = 90
+
+
+def _groups_cache_get(sid: str):
+    entry = _GROUPS_CACHE.get(sid)
+    if not entry:
+        return None
+    cached_at, groups = entry
+    if _time.time() - cached_at > _GROUPS_CACHE_TTL:
+        _GROUPS_CACHE.pop(sid, None)
+        return None
+    return groups
+
+
+def _groups_cache_put(sid: str, groups: list) -> None:
+    _GROUPS_CACHE[sid] = (_time.time(), groups)
+
+
+def _owner_counts_cache_get(sid: str):
+    entry = _OWNER_COUNTS_CACHE.get(sid)
+    if not entry:
+        return None
+    cached_at, counts = entry
+    if _time.time() - cached_at > _GROUPS_CACHE_TTL:
+        _OWNER_COUNTS_CACHE.pop(sid, None)
+        return None
+    return counts
+
+
+def _owner_counts_cache_put(sid: str, counts: dict[str, int]) -> None:
+    _OWNER_COUNTS_CACHE[sid] = (_time.time(), counts)
+
+
+def _groups_cache_clear(sid: str) -> None:
+    _GROUPS_CACHE.pop(sid, None)
+    _OWNER_COUNTS_CACHE.pop(sid, None)
+
+
 def _uploads_dir():
     from .mappings import config_dir
     d = config_dir() / "uploads"
@@ -745,6 +787,211 @@ def report_apply_stores_stream():
             promote_community_admins=promote_community_admins,
         )
     )
+
+
+# ============================================================================
+# Groups page - browse every Entra group, see owners (community admins) and
+# members, filter by Store / Franchisee / has-admins / no-admins.
+# ============================================================================
+
+def _categorise_group(group, franchisee_group_ids: set[str]) -> str:
+    """Bucket a group as 'store' / 'franchisee' / 'other'.
+
+    Store groups are identified by the same convention the apply flow uses:
+    a display name beginning with "KFC " (case-insensitive). Franchisee
+    groups are identified by id membership in the saved franchisee mappings.
+    """
+    if group.id in franchisee_group_ids:
+        return "franchisee"
+    name = (group.display_name or "").strip().lower()
+    if name.startswith("kfc "):
+        return "store"
+    return "other"
+
+
+@main_bp.route("/groups")
+@login_required
+def groups_list():
+    type_filter = (request.args.get("type") or "all").lower()
+    admin_filter = (request.args.get("admin") or "any").lower()
+    if type_filter not in ("all", "stores", "franchisees", "other"):
+        type_filter = "all"
+    if admin_filter not in ("any", "has", "none"):
+        admin_filter = "any"
+    refresh = request.args.get("refresh") == "1"
+
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except (TypeError, ValueError):
+        page = 1
+    PAGE_SIZE = 50
+
+    sid = session.get("sid") or ""
+    if refresh and sid:
+        _groups_cache_clear(sid)
+
+    client = GraphClient(get_access_token())
+    cached_groups = _groups_cache_get(sid) if sid else None
+    groups_error = None
+    if cached_groups is not None:
+        all_groups = cached_groups
+    else:
+        try:
+            all_groups = client.list_groups()
+            if sid:
+                _groups_cache_put(sid, all_groups)
+        except GraphError as exc:
+            flash(f"Failed to load groups: {exc.message}", "error")
+            all_groups = []
+            groups_error = exc.message
+
+    # Owner counts power the "has admins / no admins" filter. We only
+    # fetch them when the user actually picks one of those chips, then
+    # cache for the same TTL. The first such request can take a moment
+    # on big tenants ($batch of 20 owner-count calls per HTTP, ~10
+    # round-trips for 200 groups); cache hides the cost on filter swaps.
+    owner_counts: dict[str, int] | None = (
+        _owner_counts_cache_get(sid) if sid else None
+    )
+    if admin_filter != "any" and owner_counts is None:
+        owner_counts = {}
+        try:
+            ids = [g.id for g in all_groups]
+            for i in range(0, len(ids), 20):
+                chunk = ids[i : i + 20]
+                owner_counts.update(client.batch_count_group_owners(chunk))
+            if sid:
+                _owner_counts_cache_put(sid, owner_counts)
+        except GraphError as exc:
+            flash(
+                f"Couldn't load owner counts for the admin filter: {exc.message}",
+                "warning",
+            )
+            owner_counts = {}
+
+    franchisee_group_ids = {
+        m["group_id"] for m in load_mappings()["mappings"].values()
+    }
+
+    decorated = []
+    for g in all_groups:
+        cat = _categorise_group(g, franchisee_group_ids)
+        decorated.append({
+            "id": g.id,
+            "display_name": g.display_name or "",
+            "description": g.description,
+            "mail_nickname": g.mail_nickname,
+            "category": cat,
+            "owner_count": (owner_counts or {}).get(g.id),
+        })
+
+    if type_filter == "stores":
+        decorated = [g for g in decorated if g["category"] == "store"]
+    elif type_filter == "franchisees":
+        decorated = [g for g in decorated if g["category"] == "franchisee"]
+    elif type_filter == "other":
+        decorated = [g for g in decorated if g["category"] == "other"]
+
+    if admin_filter == "has":
+        decorated = [g for g in decorated if (g["owner_count"] or 0) > 0]
+    elif admin_filter == "none":
+        decorated = [g for g in decorated if (g["owner_count"] or 0) == 0]
+
+    decorated.sort(key=lambda g: g["display_name"].lower())
+
+    counts = {
+        "all": len(all_groups),
+        "stores": sum(
+            1 for g in all_groups
+            if _categorise_group(g, franchisee_group_ids) == "store"
+        ),
+        "franchisees": sum(
+            1 for g in all_groups
+            if _categorise_group(g, franchisee_group_ids) == "franchisee"
+        ),
+        "other": sum(
+            1 for g in all_groups
+            if _categorise_group(g, franchisee_group_ids) == "other"
+        ),
+    }
+
+    total = len(decorated)
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(page, total_pages)
+    start = (page - 1) * PAGE_SIZE
+    visible = decorated[start : start + PAGE_SIZE]
+
+    return render_template(
+        "groups_list.html",
+        user=current_user(),
+        groups=visible,
+        type_filter=type_filter,
+        admin_filter=admin_filter,
+        admin_data_loaded=owner_counts is not None,
+        counts=counts,
+        page=page,
+        total_pages=total_pages,
+        total=total,
+        range_start=(start + 1) if total else 0,
+        range_end=start + len(visible),
+        groups_error=groups_error,
+    )
+
+
+@main_bp.route("/groups/<group_id>/details")
+@login_required
+def group_details_json(group_id: str):
+    """JSON: owners and members of one group (used by row expand)."""
+    client = GraphClient(get_access_token())
+    try:
+        owners = client.list_group_owners(group_id)
+        members = client.list_group_members(group_id)
+    except GraphError as exc:
+        return jsonify({"error": exc.message}), 502
+
+    owner_ids = {o.id for o in owners}
+
+    def _u(u) -> dict:
+        return {
+            "id": u.id,
+            "name": u.display_name,
+            "email": u.mail or u.user_principal_name,
+        }
+
+    return jsonify({
+        "owners": sorted(
+            [_u(o) for o in owners],
+            key=lambda d: (d["name"] or "").lower(),
+        ),
+        "members": sorted(
+            [_u(m) for m in members if m.id not in owner_ids],
+            key=lambda d: (d["name"] or "").lower(),
+        ),
+    })
+
+
+@main_bp.route("/groups/<group_id>/members/<user_id>/remove", methods=["POST"])
+@login_required
+def group_remove_member(group_id: str, user_id: str):
+    """Remove a user from a group (Graph DELETE /members/$ref)."""
+    client = GraphClient(get_access_token())
+    try:
+        outcome = client.remove_member_from_group(group_id, user_id)
+    except GraphError as exc:
+        return jsonify({"error": exc.message}), 502
+    return jsonify({"status": outcome})
+
+
+@main_bp.route("/groups/<group_id>/owners/<user_id>/remove", methods=["POST"])
+@login_required
+def group_remove_owner(group_id: str, user_id: str):
+    """Demote a community admin (DELETE /owners/$ref). User stays in the group."""
+    client = GraphClient(get_access_token())
+    try:
+        outcome = client.remove_owner_from_group(group_id, user_id)
+    except GraphError as exc:
+        return jsonify({"error": exc.message}), 502
+    return jsonify({"status": outcome})
 
 
 # ---------- mappings management ----------

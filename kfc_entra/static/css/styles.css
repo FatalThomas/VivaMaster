@@ -816,3 +816,42 @@ a:hover { text-decoration: underline; }
 .badge-ready { background: #d6f5e0; color: var(--ok); }
 .badge-missing { background: #fde7c8; color: var(--warn); }
 .badge-skip   { background: var(--line); color: var(--muted); }
+
+/* Groups page */
+.groups-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.groups-table th, .groups-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+}
+.groups-table th {
+  font-weight: 600;
+  background: var(--bg);
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.groups-table th.num, .groups-table td.num { text-align: right; }
+.groups-table tr:hover td { background: rgba(228, 0, 43, 0.03); }
+.group-name { font-weight: 600; }
+.group-desc { font-size: 12px; margin-top: 2px; }
+.badge-store      { background: #fde7c8; color: var(--warn); }
+.badge-franchisee { background: #d6f5e0; color: var(--ok); }
+
+.chips-secondary { margin-top: 8px; }
+.chips-secondary .chip { font-size: 12px; }
+
+.group-details-row td { background: var(--bg); padding: 0 12px 14px; }
+.group-details-panel { padding: 12px 4px; font-size: 13px; }
+.group-section-h {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.chip-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.crown { color: #7a3edb; font-size: 14px; }

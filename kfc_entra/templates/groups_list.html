@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% block title %}Groups - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Groups</h1>
+    <div class="panel-head-actions">
+      <a class="btn btn-secondary"
+         href="{{ url_for('main.groups_list', type=type_filter, admin=admin_filter, refresh=1) }}"
+         title="Re-fetch from Microsoft Graph">&#x21bb; Refresh</a>
+    </div>
+  </div>
+
+  {% if groups_error %}
+    <div class="flash flash-warning">Couldn't load groups: {{ groups_error }}</div>
+  {% endif %}
+
+  <div class="chips">
+    <a class="chip {{ 'chip-active' if type_filter == 'all' else '' }}"
+       href="{{ url_for('main.groups_list', admin=admin_filter) }}">All ({{ counts.all }})</a>
+    <a class="chip {{ 'chip-active' if type_filter == 'stores' else '' }}"
+       href="{{ url_for('main.groups_list', type='stores', admin=admin_filter) }}">Store ({{ counts.stores }})</a>
+    <a class="chip {{ 'chip-active' if type_filter == 'franchisees' else '' }}"
+       href="{{ url_for('main.groups_list', type='franchisees', admin=admin_filter) }}">Franchisee ({{ counts.franchisees }})</a>
+    <a class="chip {{ 'chip-active' if type_filter == 'other' else '' }}"
+       href="{{ url_for('main.groups_list', type='other', admin=admin_filter) }}">Other ({{ counts.other }})</a>
+  </div>
+
+  <div class="chips chips-secondary">
+    <a class="chip {{ 'chip-active' if admin_filter == 'any' else '' }}"
+       href="{{ url_for('main.groups_list', type=type_filter) }}">Any</a>
+    <a class="chip {{ 'chip-active' if admin_filter == 'has' else '' }}"
+       href="{{ url_for('main.groups_list', type=type_filter, admin='has') }}"
+       title="{{ 'Already cached - instant.' if admin_data_loaded else 'Bulk-fetches owner counts the first time (~few seconds).' }}">Has admins</a>
+    <a class="chip {{ 'chip-active' if admin_filter == 'none' else '' }}"
+       href="{{ url_for('main.groups_list', type=type_filter, admin='none') }}"
+       title="{{ 'Already cached - instant.' if admin_data_loaded else 'Bulk-fetches owner counts the first time (~few seconds).' }}">No admins</a>
+  </div>
+
+  {% if groups %}
+  <table class="groups-table">
+    <thead>
+      <tr>
+        <th>Group</th>
+        <th>Type</th>
+        <th class="num">Admins</th>
+        <th class="actions-col">Members &amp; owners</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for g in groups %}
+      <tr class="group-row" data-group-id="{{ g.id }}" data-group-name="{{ g.display_name }}">
+        <td>
+          <div class="group-name">{{ g.display_name }}</div>
+          {% if g.description %}
+            <div class="muted group-desc">{{ g.description }}</div>
+          {% endif %}
+        </td>
+        <td>
+          {% if g.category == 'store' %}
+            <span class="badge badge-store">Store</span>
+          {% elif g.category == 'franchisee' %}
+            <span class="badge badge-franchisee">Franchisee</span>
+          {% else %}
+            <span class="badge">Other</span>
+          {% endif %}
+        </td>
+        <td class="num">
+          {% if g.owner_count is none %}
+            <span class="muted">&mdash;</span>
+          {% elif g.owner_count > 0 %}
+            <span class="badge badge-admin">&#9819; {{ g.owner_count }}</span>
+          {% else %}
+            <span class="muted">0</span>
+          {% endif %}
+        </td>
+        <td class="actions-col">
+          <button type="button" class="btn btn-tiny btn-secondary group-expand"
+                  data-group-id="{{ g.id }}" data-group-name="{{ g.display_name }}">
+            Show
+          </button>
+        </td>
+      </tr>
+      <tr class="group-details-row" data-group-id="{{ g.id }}" hidden>
+        <td colspan="4">
+          <div class="group-details-panel">Loading&hellip;</div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <nav class="pagination">
+    <span class="muted">
+      Showing <b>{{ range_start }}-{{ range_end }}</b> of <b>{{ total }}</b>
+    </span>
+    {% if total_pages > 1 %}
+    <div class="page-controls">
+      {% if page > 1 %}
+        <a class="btn btn-secondary btn-tiny"
+           href="{{ url_for('main.groups_list', type=type_filter, admin=admin_filter, page=page-1) }}">&laquo; Prev</a>
+      {% else %}
+        <span class="btn btn-secondary btn-tiny btn-disabled">&laquo; Prev</span>
+      {% endif %}
+      <span class="muted">Page {{ page }} of {{ total_pages }}</span>
+      {% if page < total_pages %}
+        <a class="btn btn-secondary btn-tiny"
+           href="{{ url_for('main.groups_list', type=type_filter, admin=admin_filter, page=page+1) }}">Next &raquo;</a>
+      {% else %}
+        <span class="btn btn-secondary btn-tiny btn-disabled">Next &raquo;</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </nav>
+
+  {% else %}
+    <div class="empty-state">
+      <div class="art">&#127968;</div>
+      <h2>No groups match these filters</h2>
+      <p>Try clearing the filters or hit Refresh.</p>
+      <a class="btn btn-secondary" href="{{ url_for('main.groups_list') }}">Clear filters</a>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var loaded = {};
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function renderPanel(panel, groupId, groupName, data) {
+    var owners = data.owners || [];
+    var members = data.members || [];
+
+    function userChips(list, kind) {
+      if (!list.length) {
+        return '<em class="muted">' + (kind === "owner" ? "No community admins." : "No member-only users.") + "</em>";
+      }
+      return '<div class="chip-list">' + list.map(function (u) {
+        var url = "/groups/" + encodeURIComponent(groupId) + "/" +
+                  (kind === "owner" ? "owners" : "members") + "/" +
+                  encodeURIComponent(u.id) + "/remove";
+        return '<span class="user-group-chip" data-user-id="' + esc(u.id) +
+               '" data-kind="' + kind + '">' +
+               (kind === "owner" ? '<span class="crown" title="Community admin">&#9819;</span> ' : "") +
+               '<span class="user-group-name">' + esc(u.name || u.email || u.id) + '</span>' +
+               '<button type="button" class="user-group-remove" ' +
+               'data-url="' + url + '" data-label="' + esc(u.name || u.email || u.id) + '" ' +
+               'data-kind-label="' + (kind === "owner" ? "owner / community admin" : "member") + '" ' +
+               'title="' + (kind === "owner" ? "Demote from owner" : "Remove from group") + '">&times;</button>' +
+               '</span>';
+      }).join("") + '</div>';
+    }
+
+    panel.innerHTML =
+      '<h3 class="group-section-h">&#9819; Community admins (' + owners.length + ')</h3>' +
+      userChips(owners, "owner") +
+      '<h3 class="group-section-h">Members only (' + members.length + ')</h3>' +
+      userChips(members, "member");
+
+    panel.querySelectorAll(".user-group-remove").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var chip = btn.closest(".user-group-chip");
+        var label = btn.dataset.label;
+        var kindLabel = btn.dataset.kindLabel;
+        var ok = confirm("Remove " + label + " as " + kindLabel + " from \"" + groupName + "\"?");
+        if (!ok) return;
+        btn.disabled = true;
+        chip.style.opacity = "0.5";
+        fetch(btn.dataset.url, { method: "POST", credentials: "same-origin" })
+          .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+          .then(function (res) {
+            if (!res.ok) throw new Error(res.data.error || "Failed.");
+            chip.remove();
+            kfcToast(label + " removed from \"" + groupName + "\".", "success");
+          })
+          .catch(function (err) {
+            btn.disabled = false;
+            chip.style.opacity = "1";
+            kfcToast(err.message, "error");
+          });
+      });
+    });
+  }
+
+  document.querySelectorAll(".group-expand").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var groupId = btn.dataset.groupId;
+      var groupName = btn.dataset.groupName;
+      var row = document.querySelector('.group-details-row[data-group-id="' + groupId + '"]');
+      if (!row) return;
+      if (!row.hidden) {
+        row.hidden = true;
+        btn.textContent = "Show";
+        return;
+      }
+      row.hidden = false;
+      btn.textContent = "Hide";
+      var panel = row.querySelector(".group-details-panel");
+      if (loaded[groupId]) return;
+      panel.innerHTML = '<span class="spinner spinner-sm"></span> Loading members and owners&hellip;';
+      fetch("/groups/" + encodeURIComponent(groupId) + "/details", { credentials: "same-origin" })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+        .then(function (res) {
+          if (!res.ok) throw new Error(res.data.error || "Failed to load.");
+          loaded[groupId] = true;
+          renderPanel(panel, groupId, groupName, res.data);
+        })
+        .catch(function (err) {
+          panel.innerHTML = '<span class="muted">Couldn\'t load: ' + esc(err.message) + '</span>';
+        });
+    });
+  });
+})();
+</script>
+{% endblock %}

@@ -21,6 +21,7 @@
       {% if current_user %}
         <a href="{{ url_for('main.dashboard') }}">Dashboard</a>
         <a href="{{ url_for('main.users_list') }}">Users</a>
+        <a href="{{ url_for('main.groups_list') }}">Groups</a>
         <a href="{{ url_for('main.report_upload_page') }}">Report</a>
         <a href="{{ url_for('main.add_user') }}">Add user</a>
         <span class="who">{{ current_user.get('name') or current_user.get('preferred_username') }}</span>
