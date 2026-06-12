@@ -437,6 +437,63 @@ class GraphClient:
                 return "not_in_group"
             raise
 
+    def delete_user(self, user_id: str) -> str:
+        """Move one user to Deleted Users (soft-delete; recoverable for 30 days).
+
+        Returns 'deleted' or 'already_gone' (404 - they were already deleted).
+        """
+        try:
+            self._request("DELETE", f"/users/{user_id}")
+            return "deleted"
+        except GraphError as exc:
+            lower = (exc.message or "").lower()
+            if exc.status == 404 or "does not exist" in lower or "could not be found" in lower:
+                return "already_gone"
+            raise
+
+    def batch_delete_users(self, user_ids: list[str]) -> dict[str, tuple[str, str]]:
+        """Delete up to 20 users via Graph $batch (DELETE /users/{id}).
+
+        Returns {user_id: (outcome, reason)} where outcome is one of
+        'deleted' / 'already_gone' / 'failed'. Deleted users land in the
+        tenant's Deleted Users container for 30 days, so this is
+        recoverable - we still surface a clear "deleted" outcome
+        because the user is no longer findable through normal queries.
+        """
+        if not user_ids:
+            return {}
+        if len(user_ids) > 20:
+            raise ValueError("Microsoft Graph $batch is limited to 20 requests.")
+
+        requests_body = [
+            {"id": str(idx), "method": "DELETE", "url": f"/users/{uid}"}
+            for idx, uid in enumerate(user_ids)
+        ]
+        resp = self._request("POST", "/$batch", json={"requests": requests_body})
+        results: dict[str, tuple[str, str]] = {}
+        for entry in resp.json().get("responses") or []:
+            try:
+                idx = int(entry.get("id", -1))
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= idx < len(user_ids):
+                continue
+            uid = user_ids[idx]
+            status = entry.get("status", 500)
+            if 200 <= status < 300 or status == 204:
+                results[uid] = ("deleted", "")
+                continue
+            body = entry.get("body") or {}
+            msg = (body.get("error") or {}).get("message", str(body))
+            lower = msg.lower()
+            if status == 404 or "does not exist" in lower or "could not be found" in lower:
+                results[uid] = ("already_gone", "")
+            else:
+                results[uid] = ("failed", msg)
+        for uid in user_ids:
+            results.setdefault(uid, ("failed", "Graph $batch returned no response for this user."))
+        return results
+
     def disable_user(self, user_id: str) -> None:
         """Soft-delete: set accountEnabled to false. User is preserved in Entra."""
         self.update_user(user_id, {"accountEnabled": False})

@@ -595,6 +595,10 @@ def report_apply_stream():
         assignments = {}
     include_unknown = bool(payload.get("include_unknown"))
     remove_missing = bool(payload.get("remove_missing"))
+    delete_missing = bool(payload.get("delete_missing"))
+    # Safety belt: delete is only meaningful as a sub-option of remove.
+    if delete_missing and not remove_missing:
+        delete_missing = False
     client = GraphClient(get_access_token())
     return _sse_response(
         iter_apply_mappings(
@@ -602,6 +606,7 @@ def report_apply_stream():
             assignments=assignments,
             include_unknown=include_unknown,
             remove_missing=remove_missing,
+            delete_missing=delete_missing,
         )
     )
 

@@ -110,8 +110,9 @@ def iter_apply_mappings(
     assignments: dict[str, dict],
     include_unknown: bool = False,
     remove_missing: bool = False,
+    delete_missing: bool = False,
 ) -> Iterator[dict]:
-    """Add (and optionally remove) report rows from Franchisee groups.
+    """Add (and optionally remove + delete) report rows from Franchisee groups.
 
     ``assignments`` maps Franchisee code -> {"group_id": str|None,
     "group_name": str}. Codes mapped to a name without an id get the group
@@ -255,7 +256,26 @@ def iter_apply_mappings(
                 ]
 
     total_removes = sum(len(v) for v in removals_by_group.values())
-    total = total_skipped + total_adds + total_removes
+
+    # --- if delete_missing: each user who's about to be removed will ALSO be
+    # deleted from the tenant (DELETE /users/{id}). Compute unique user ids
+    # so a user in three mapped groups counts as a single delete - not three.
+    unique_users_to_delete: list[dict] = []
+    if delete_missing and remove_missing:
+        seen_uids: set[str] = set()
+        for items in removals_by_group.values():
+            for item in items:
+                if item["user_id"] in seen_uids:
+                    continue
+                seen_uids.add(item["user_id"])
+                unique_users_to_delete.append({
+                    "user_id": item["user_id"],
+                    "code": item["code"],
+                    "label": item["label"],
+                })
+    total_deletes = len(unique_users_to_delete)
+
+    total = total_skipped + total_adds + total_removes + total_deletes
     yield {"type": "start", "total": total}
 
     per_franchisee: dict[str, dict] = {}
@@ -268,6 +288,7 @@ def iter_apply_mappings(
             {
                 "added": 0, "already_member": 0, "skipped": 0, "failed": 0,
                 "removed": 0, "not_in_group": 0,
+                "deleted": 0, "already_gone": 0,
             },
         )
 
@@ -349,8 +370,50 @@ def iter_apply_mappings(
                     ),
                 }
 
+    # --- batch-delete: when delete_missing is also on, every user whose
+    # group membership was just revoked is moved to the tenant's Deleted
+    # Users container. Recoverable for 30 days from the Entra portal but
+    # invisible to normal queries until restored. 20 deletes per Graph
+    # round-trip via $batch.
+    if unique_users_to_delete:
+        yield {
+            "type": "phase",
+            "message": (
+                f"Deleting {total_deletes} user(s) from the tenant "
+                f"(recoverable for 30 days from Entra > Deleted users)..."
+            ),
+        }
+    for i in range(0, len(unique_users_to_delete), BATCH_SIZE):
+        chunk = unique_users_to_delete[i : i + BATCH_SIZE]
+        user_ids = [c["user_id"] for c in chunk]
+        try:
+            results = client.batch_delete_users(user_ids)
+        except GraphError as exc:
+            results = {uid: ("failed", exc.message) for uid in user_ids}
+        for c in chunk:
+            emitted += 1
+            outcome, reason = results.get(c["user_id"], ("failed", "No batch response for this user"))
+            stats = bucket(c["code"])
+            stats[outcome] = stats.get(outcome, 0) + 1
+            if outcome == "failed":
+                failures.append({
+                    "user": c["label"], "franchisee": c["code"],
+                    "reason": reason, "action": "delete",
+                })
+            yield {
+                "type": "progress", "current": emitted, "total": total,
+                "franchisee": c["code"], "user": c["label"],
+                "status": outcome,
+                "reason": (
+                    reason if outcome == "failed"
+                    else "Already gone from the tenant" if outcome == "already_gone"
+                    else "Deleted from tenant (recoverable for 30 days)"
+                ),
+            }
+
     totals = {"added": 0, "already_member": 0, "skipped": 0, "failed": 0,
-              "removed": 0, "not_in_group": 0}
+              "removed": 0, "not_in_group": 0,
+              "deleted": 0, "already_gone": 0}
     for stats in per_franchisee.values():
         for key in totals:
             totals[key] += stats.get(key, 0)

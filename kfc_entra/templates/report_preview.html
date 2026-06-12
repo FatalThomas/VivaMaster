@@ -30,6 +30,12 @@
             <small>(reconcile)</small>
       </span>
     </label>
+    <label class="checkbox checkbox-nested" id="delete-missing-label">
+      <input type="checkbox" id="delete-missing" disabled>
+      <span>&hellip; and also <b>delete</b> those users from the tenant
+            <small>(recoverable for 30 days from Entra &gt; Deleted users)</small>
+      </span>
+    </label>
     <button type="button" class="btn btn-primary" id="apply-btn">Apply to Entra groups</button>
   </div>
 
@@ -195,7 +201,20 @@
   /* apply */
   var applyBtn = document.getElementById("apply-btn");
   var removeMissing = document.getElementById("remove-missing");
+  var deleteMissing = document.getElementById("delete-missing");
+  var deleteMissingLabel = document.getElementById("delete-missing-label");
   var panel = document.getElementById("apply-panel");
+
+  // Delete is a sub-option of reconcile - locked until reconcile is ticked.
+  function syncDeleteState() {
+    var on = removeMissing.checked;
+    deleteMissing.disabled = !on;
+    deleteMissingLabel.classList.toggle("checkbox-disabled", !on);
+    if (!on) deleteMissing.checked = false;
+  }
+  removeMissing.addEventListener("change", syncDeleteState);
+  syncDeleteState();
+
   applyBtn.addEventListener("click", function () {
     var mapped = Object.keys(assignments).length;
     if (!mapped) {
@@ -204,21 +223,44 @@
     }
     var totalRows = {{ total_rows }};
     var reconcile = removeMissing.checked;
-    var body = reconcile
-      ? "About to process <b>" + totalRows + "</b> row(s) across <b>" +
+    var purge = reconcile && deleteMissing.checked;
+
+    var body;
+    if (purge) {
+      body =
+        "About to process <b>" + totalRows + "</b> row(s) across <b>" +
+        mapped + "</b> mapped Franchisee(s). With <b>Reconcile + Delete</b> " +
+        "ticked, users currently in any mapped group but <b>not in this " +
+        "report</b> will be removed from the group <b>and then deleted " +
+        "from the tenant</b>. Deletions land in <b>Entra &gt; Deleted " +
+        "users</b> and stay recoverable for 30 days.";
+    } else if (reconcile) {
+      body =
+        "About to process <b>" + totalRows + "</b> row(s) across <b>" +
         mapped + "</b> mapped Franchisee(s). With <b>Reconcile</b> ticked, " +
         "users currently in any mapped group but <b>not in this report</b> " +
         "will also be <b>removed from that group</b>. Their Entra accounts " +
-        "are not deleted - only the group membership is revoked."
-      : "About to process <b>" + totalRows + "</b> row(s) across <b>" +
+        "are not deleted - only the group membership is revoked.";
+    } else {
+      body =
+        "About to process <b>" + totalRows + "</b> row(s) across <b>" +
         mapped + "</b> mapped Franchisee(s). Users already in their " +
         "group are skipped, so re-running is safe.";
+    }
+
+    var title = purge
+      ? "Apply, reconcile &amp; delete from tenant?"
+      : reconcile
+      ? "Apply &amp; reconcile group memberships?"
+      : "Apply group memberships?";
+    var confirmLabel = purge
+      ? "Apply, reconcile &amp; delete"
+      : reconcile
+      ? "Apply &amp; reconcile"
+      : "Apply now";
+
     var proceed = totalRows > 5 || reconcile
-      ? kfcConfirm({
-          title: reconcile ? "Apply &amp; reconcile group memberships?" : "Apply group memberships?",
-          bodyHtml: body,
-          confirmLabel: reconcile ? "Apply &amp; reconcile" : "Apply now",
-        })
+      ? kfcConfirm({ title: title, bodyHtml: body, confirmLabel: confirmLabel })
       : Promise.resolve(confirm("Apply group memberships for " + mapped + " Franchisee(s)?"));
     proceed.then(function (ok) {
       if (!ok) return;
@@ -230,10 +272,11 @@
           upload_id: UPLOAD_ID,
           include_unknown: includeUnknown.checked,
           remove_missing: reconcile,
+          delete_missing: purge,
           assignments: assignments,
         },
         panel: panel,
-        verb: reconcile ? "Reconciling" : "Adding",
+        verb: purge ? "Reconciling + deleting" : reconcile ? "Reconciling" : "Adding",
         failuresCsvName: "report-apply-failures.csv",
         onDone: function () { kfcBusy(applyBtn, false); },
       });

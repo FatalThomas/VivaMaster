@@ -195,6 +195,10 @@
           logLine("line-ok", "− " + ev.user, ev.reason || "removed from the group");
         } else if (ev.status === "disabled") {
           logLine("line-ok", "⊘ " + ev.user, ev.reason || "account disabled");
+        } else if (ev.status === "deleted") {
+          logLine("line-ok", "🗑 " + ev.user, ev.reason || "deleted from tenant");
+        } else if (ev.status === "already_gone") {
+          logLine("line-skip", "○ " + ev.user, ev.reason || "already deleted");
         } else if (ev.status === "not_in_group") {
           logLine("line-skip", "○ " + ev.user, ev.reason || "wasn't in the group");
         } else if (ev.status === "skipped") {
@@ -223,6 +227,7 @@
       card.className = "summary-card";
       var ok = summary.succeeded !== undefined ? summary.succeeded : (summary.added || 0);
       var hasRemoves = (summary.removed || 0) + (summary.not_in_group || 0) > 0;
+      var hasDeletes = (summary.deleted || 0) + (summary.already_gone || 0) > 0;
       var failedList = summary.failures || [];
       var html =
         '<div class="summary-stats">' +
@@ -233,6 +238,10 @@
           ? '<div class="stat stat-ok"><b>' + summary.removed + '</b><span>removed</span></div>' : "") +
         (summary.not_in_group
           ? '<div class="stat stat-skip"><b>' + summary.not_in_group + '</b><span>not in group</span></div>' : "") +
+        (summary.deleted
+          ? '<div class="stat stat-ok"><b>' + summary.deleted + '</b><span>deleted</span></div>' : "") +
+        (summary.already_gone
+          ? '<div class="stat stat-skip"><b>' + summary.already_gone + '</b><span>already gone</span></div>' : "") +
         (summary.skipped !== undefined
           ? '<div class="stat stat-skip"><b>' + summary.skipped + '</b><span>skipped</span></div>' : "") +
         '<div class="stat stat-fail"><b>' + (summary.failed || 0) + '</b><span>failed</span></div>' +
@@ -241,12 +250,14 @@
       if (summary.per_franchisee) {
         var th = '<th>Franchisee</th><th>Added</th><th>Already</th>' +
                  (hasRemoves ? '<th>Removed</th><th>Not in group</th>' : '') +
+                 (hasDeletes ? '<th>Deleted</th><th>Already gone</th>' : '') +
                  '<th>Skipped</th><th>Failed</th>';
         html += '<table class="mini-table"><thead><tr>' + th + '</tr></thead><tbody>';
         Object.keys(summary.per_franchisee).sort().forEach(function (code) {
           var s = summary.per_franchisee[code];
           html += "<tr><td>" + code + "</td><td>" + (s.added||0) + "</td><td>" + (s.already_member||0) + "</td>";
           if (hasRemoves) html += "<td>" + (s.removed||0) + "</td><td>" + (s.not_in_group||0) + "</td>";
+          if (hasDeletes) html += "<td>" + (s.deleted||0) + "</td><td>" + (s.already_gone||0) + "</td>";
           html += "<td>" + (s.skipped||0) + "</td><td>" + (s.failed||0) + "</td></tr>";
         });
         html += "</tbody></table>";

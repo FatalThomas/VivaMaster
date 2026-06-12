@@ -770,3 +770,9 @@ a:hover { text-decoration: underline; }
   font-size: 12px;
   line-height: 1.6;
 }
+
+.checkbox-nested { margin-left: 22px; }
+.checkbox-nested span { color: var(--ink); }
+.checkbox-disabled span,
+.checkbox-disabled span small { color: var(--muted); }
+.checkbox-disabled input { cursor: not-allowed; }
