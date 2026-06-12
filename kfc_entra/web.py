@@ -34,7 +34,12 @@ from .auth import (
     poll_device_flow,
     start_device_flow,
 )
-from .bulk import iter_apply_mappings, iter_convert_to_member
+from .bulk import (
+    iter_apply_mappings,
+    iter_bulk_offboard,
+    iter_convert_to_member,
+    parse_offboard_emails,
+)
 from .graph_client import GraphClient, GraphError
 from .mappings import delete_mapping, load_mappings, save_mapping
 from .report import (
@@ -660,6 +665,107 @@ def report_mappings_delete(code: str):
     else:
         flash(f"No mapping found for {code.upper()}.", "warning")
     return redirect(url_for("main.report_mappings"))
+
+
+# ============================================================================
+# Bulk offboard - upload CSV/XLSX of emails, optionally disable accounts
+# ============================================================================
+
+# Same in-memory + on-disk pattern as the report uploads.
+_OFFBOARD_STORE: OrderedDict[str, list[str]] = OrderedDict()
+_OFFBOARD_STORE_MAX = 5
+
+
+def _offboard_dir():
+    from .mappings import config_dir
+    d = config_dir() / "offboards"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _stash_offboard(emails: list[str]) -> str:
+    token = uuid.uuid4().hex
+    _OFFBOARD_STORE[token] = list(emails)
+    while len(_OFFBOARD_STORE) > _OFFBOARD_STORE_MAX:
+        _OFFBOARD_STORE.popitem(last=False)
+    try:
+        with open(_offboard_dir() / f"{token}.json", "w", encoding="utf-8") as fh:
+            json.dump(emails, fh)
+    except OSError:
+        pass
+    return token
+
+
+def _load_offboard(token: str) -> list[str] | None:
+    raw = _OFFBOARD_STORE.get(token or "")
+    if raw is None and token:
+        try:
+            with open(_offboard_dir() / f"{token}.json", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            _OFFBOARD_STORE[token] = raw
+        except (OSError, ValueError):
+            raw = None
+    return raw
+
+
+@main_bp.route("/offboard")
+@login_required
+def offboard_upload_page():
+    return render_template("offboard_upload.html", user=current_user())
+
+
+@main_bp.route("/offboard/upload", methods=["POST"])
+@login_required
+def offboard_upload():
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Please pick a CSV / TSV / XLSX file to upload.", "error")
+        return redirect(url_for("main.offboard_upload_page"))
+    content = file.read()
+    try:
+        emails = parse_offboard_emails(content, file.filename)
+    except Exception as exc:  # parser raised
+        flash(f"Couldn't read that file: {exc}", "error")
+        return redirect(url_for("main.offboard_upload_page"))
+    if not emails:
+        flash("No email addresses found in that file.", "warning")
+        return redirect(url_for("main.offboard_upload_page"))
+    token = _stash_offboard(emails)
+    return redirect(url_for("main.offboard_preview", upload_id=token))
+
+
+@main_bp.route("/offboard/preview/<upload_id>")
+@login_required
+def offboard_preview(upload_id: str):
+    emails = _load_offboard(upload_id)
+    if emails is None:
+        flash("Upload expired or not found - please re-upload.", "error")
+        return redirect(url_for("main.offboard_upload_page"))
+    return render_template(
+        "offboard_preview.html",
+        user=current_user(),
+        upload_id=upload_id,
+        emails=emails,
+        total=len(emails),
+    )
+
+
+@main_bp.route("/offboard/apply/stream", methods=["POST"])
+@login_required
+def offboard_apply_stream():
+    payload = request.get_json(silent=True) or {}
+    upload_id = payload.get("upload_id") or ""
+    emails = _load_offboard(upload_id)
+    if emails is None:
+        return _sse_response(
+            [{"type": "error",
+              "message": "Upload expired or not found - please re-upload."}]
+        )
+    disable_accounts = bool(payload.get("disable_accounts"))
+    client = GraphClient(get_access_token())
+    return _sse_response(
+        iter_bulk_offboard(client, emails, disable_accounts=disable_accounts)
+    )
 
 
 def _display_name_from_email(email: str) -> str:

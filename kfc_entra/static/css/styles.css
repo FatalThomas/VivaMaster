@@ -729,3 +729,44 @@ a:hover { text-decoration: underline; }
 .user-group-remove:hover { background: #fbe6e2; color: var(--err); }
 .user-group-remove:disabled { cursor: not-allowed; opacity: 0.4; }
 .spinner-sm { width: 11px; height: 11px; border-width: 2px; vertical-align: -2px; }
+
+/* Offboard card on the dashboard - subtle red accent so it stands out */
+.card-danger { border-color: #f4c4c4; }
+.card-danger:hover { border-color: var(--kfc-red); }
+.card-danger h2 { color: var(--kfc-red); }
+
+/* Drag/drop file picker used by the offboard upload page */
+.upload-form { display: flex; flex-direction: column; gap: 16px; max-width: 620px; }
+.upload-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 32px;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.upload-zone.dragging { border-color: var(--kfc-red); background: #fff6f7; }
+.upload-art { font-size: 28px; opacity: 0.6; }
+.upload-prompt { font-size: 14px; }
+.upload-prompt .link { color: var(--kfc-red); font-weight: 600; }
+.upload-hint { font-size: 12px; }
+.upload-filename { font-size: 13px; margin-top: 6px; word-break: break-all; }
+
+.offboard-list-details { margin-top: 18px; }
+.offboard-list-details summary { cursor: pointer; font-size: 13px; padding: 6px 0; }
+.offboard-emails {
+  margin: 8px 0 0 0;
+  padding: 12px 12px 12px 36px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.6;
+}

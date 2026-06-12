@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Bulk offboard - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Bulk offboard</h1>
+    <a class="btn btn-secondary" href="{{ url_for('main.dashboard') }}">Cancel</a>
+  </div>
+
+  <p class="muted">
+    Upload a CSV / TSV / XLSX file with an <b>email</b> column. For each
+    matched account, this app will remove them from <b>every</b> group they
+    belong to and optionally disable their Entra account. Their account is
+    not deleted &mdash; re-enabling it restores access.
+  </p>
+
+  <form method="post" action="{{ url_for('main.offboard_upload') }}"
+        enctype="multipart/form-data" class="upload-form">
+    <label class="upload-zone" id="upload-zone">
+      <input type="file" name="file" accept=".csv,.tsv,.xlsx,.xlsm" required hidden>
+      <div class="upload-art">&#128196;</div>
+      <div class="upload-prompt"><b>Drag &amp; drop</b> a file, or <span class="link">browse</span></div>
+      <div class="upload-hint muted">.csv &middot; .tsv &middot; .xlsx</div>
+      <div class="upload-filename muted"></div>
+    </label>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Parse &amp; preview</button>
+      <a class="btn btn-secondary" href="{{ url_for('main.dashboard') }}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var zone = document.getElementById("upload-zone");
+  var input = zone.querySelector('input[type=file]');
+  var name = zone.querySelector(".upload-filename");
+  function setName() {
+    name.textContent = input.files && input.files[0] ? input.files[0].name : "";
+  }
+  input.addEventListener("change", setName);
+  ["dragover", "dragenter"].forEach(function (ev) {
+    zone.addEventListener(ev, function (e) { e.preventDefault(); zone.classList.add("dragging"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    zone.addEventListener(ev, function (e) { e.preventDefault(); zone.classList.remove("dragging"); });
+  });
+  zone.addEventListener("drop", function (e) {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+      input.files = e.dataTransfer.files;
+      setName();
+    }
+  });
+})();
+</script>
+{% endblock %}

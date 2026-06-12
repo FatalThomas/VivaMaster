@@ -365,3 +365,214 @@ def iter_apply_mappings(
             **totals,
         },
     }
+
+
+# ============================================================================
+# Bulk offboard: remove every group membership for each email in an uploaded
+# CSV / TSV / XLSX, and (optionally) disable each Entra account in the same
+# pass. Idempotent and resumable - re-uploading a partially-processed CSV
+# just sees "not_in_group" for the groups we already cleared and skips them.
+# ============================================================================
+
+def parse_offboard_emails(content: bytes, filename: str) -> list[str]:
+    """Pull email addresses out of a CSV / TSV / XLSX file.
+
+    Looks for a column whose header contains 'email', 'mail', or 'upn'
+    (case-insensitive). If no such header exists, falls back to the first
+    column. Returns a de-duplicated, case-preserved list.
+    """
+    import csv as _csv
+    import io as _io
+    import pathlib as _pl
+    suffix = _pl.Path(filename or "").suffix.lower()
+    rows: list[list[str]] = []
+
+    if suffix in (".xlsx", ".xlsm"):
+        from openpyxl import load_workbook
+        wb = load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        if ws is not None:
+            for r in ws.iter_rows(values_only=True):
+                rows.append(["" if v is None else str(v) for v in r])
+    else:
+        text = content.decode("utf-8-sig", errors="replace")
+        try:
+            dialect = _csv.Sniffer().sniff(text[:4096], delimiters=",\t;|")
+        except _csv.Error:
+            dialect = _csv.excel
+        rows = [list(r) for r in _csv.reader(_io.StringIO(text), dialect=dialect)]
+
+    if not rows:
+        return []
+
+    # Find email column. Header heuristics, then fall back to first column.
+    header = [str(h or "").strip().lower() for h in rows[0]]
+    email_idx = next(
+        (i for i, h in enumerate(header)
+         if "email" in h or "e-mail" in h or "mail" in h or "upn" in h),
+        None,
+    )
+    if email_idx is None:
+        email_idx, start = 0, 0
+    else:
+        start = 1
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for row in rows[start:]:
+        if not row:
+            continue
+        val = row[email_idx] if email_idx < len(row) else ""
+        s = (val or "").strip()
+        if "@" not in s:
+            continue
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
+
+
+def iter_bulk_offboard(
+    client: GraphClient,
+    emails: Iterable[str],
+    disable_accounts: bool = False,
+) -> Iterator[dict]:
+    """Remove each user from every group they're in (and optionally disable).
+
+    Streams progress events in the same vocabulary as the other bulk ops so
+    the existing kfcRunBulk JS handles it without changes:
+      phase    -> "Resolving N email(s)...", etc.
+      start    -> {"total": N}
+      progress -> per (email, group) or per (email, disable) item
+      done     -> {"summary": {...}}
+    """
+    yield {"type": "phase", "message": "Resolving emails to Entra accounts..."}
+
+    # --- resolve each email --------------------------------------------------
+    resolved: list[dict] = []
+    not_found: list[str] = []
+    for email in emails:
+        try:
+            user = client.get_user_by_email(email)
+        except GraphError:
+            user = None
+        if user is None:
+            not_found.append(email)
+        else:
+            resolved.append({"email": email, "user_id": user.id,
+                             "display_name": user.display_name})
+
+    yield {
+        "type": "phase",
+        "message": (
+            f"Found {len(resolved)} account(s); "
+            f"{len(not_found)} email(s) had no matching Entra account."
+        ),
+    }
+
+    # --- list each resolved user's groups ------------------------------------
+    yield {"type": "phase", "message": "Listing group memberships..."}
+    per_user_groups: dict[str, list[str]] = {}
+    for item in resolved:
+        try:
+            groups = client.list_user_groups(item["user_id"])
+            per_user_groups[item["user_id"]] = [g.id for g in groups]
+        except GraphError:
+            per_user_groups[item["user_id"]] = []
+
+    # Pivot: group_id -> [{user_id, email}, ...] so we can batch-DELETE 20
+    # users from the same group in one Graph $batch call.
+    removals_by_group: dict[str, list[dict]] = {}
+    for item in resolved:
+        for gid in per_user_groups.get(item["user_id"], []):
+            removals_by_group.setdefault(gid, []).append(
+                {"user_id": item["user_id"], "email": item["email"]}
+            )
+
+    total_removals = sum(len(v) for v in removals_by_group.values())
+    total_disables = len(resolved) if disable_accounts else 0
+    total = len(not_found) + total_removals + total_disables
+    yield {"type": "start", "total": total}
+
+    failures: list[dict] = []
+    emitted = 0
+
+    # --- "not found" events --------------------------------------------------
+    for email in not_found:
+        emitted += 1
+        yield {
+            "type": "progress", "current": emitted, "total": total,
+            "user": email, "status": "skipped",
+            "reason": "No Entra account found for this email",
+        }
+
+    # --- batch-remove from each group ----------------------------------------
+    BATCH_SIZE = 20
+    for group_id, items in removals_by_group.items():
+        for i in range(0, len(items), BATCH_SIZE):
+            chunk = items[i : i + BATCH_SIZE]
+            uids = [c["user_id"] for c in chunk]
+            try:
+                results = client.batch_remove_members_from_group(group_id, uids)
+            except GraphError as exc:
+                results = {uid: ("failed", exc.message) for uid in uids}
+            for c in chunk:
+                emitted += 1
+                outcome, reason = results.get(c["user_id"], ("failed", "No batch response"))
+                if outcome == "failed":
+                    failures.append({
+                        "user": c["email"], "reason": reason, "action": "remove",
+                    })
+                yield {
+                    "type": "progress", "current": emitted, "total": total,
+                    "user": c["email"], "status": outcome,
+                    "reason": (
+                        reason if outcome == "failed"
+                        else "Wasn't in the group" if outcome == "not_in_group"
+                        else "Removed from the group"
+                    ),
+                }
+
+    # --- account disables ----------------------------------------------------
+    if disable_accounts and resolved:
+        yield {
+            "type": "phase",
+            "message": f"Disabling {len(resolved)} account(s)...",
+        }
+        for item in resolved:
+            emitted += 1
+            try:
+                client.disable_user(item["user_id"])
+                yield {
+                    "type": "progress", "current": emitted, "total": total,
+                    "user": item["email"], "status": "disabled",
+                    "reason": "Account disabled",
+                }
+            except GraphError as exc:
+                failures.append({
+                    "user": item["email"], "reason": exc.message, "action": "disable",
+                })
+                yield {
+                    "type": "progress", "current": emitted, "total": total,
+                    "user": item["email"], "status": "failed",
+                    "reason": "Couldn't disable account: " + exc.message,
+                }
+
+    yield {
+        "type": "done",
+        "summary": {
+            "total": total,
+            "users_offboarded": len(resolved),
+            "users_not_found": len(not_found),
+            "groups_removed": total_removals - len([
+                f for f in failures if f.get("action") == "remove"
+            ]),
+            "accounts_disabled": (
+                total_disables - len([f for f in failures if f.get("action") == "disable"])
+                if disable_accounts else 0
+            ),
+            "failures": failures,
+        },
+    }

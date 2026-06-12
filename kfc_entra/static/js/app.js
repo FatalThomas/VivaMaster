@@ -193,6 +193,8 @@
           logLine("line-skip", "✓ " + ev.user, "already in the group");
         } else if (ev.status === "removed") {
           logLine("line-ok", "− " + ev.user, ev.reason || "removed from the group");
+        } else if (ev.status === "disabled") {
+          logLine("line-ok", "⊘ " + ev.user, ev.reason || "account disabled");
         } else if (ev.status === "not_in_group") {
           logLine("line-skip", "○ " + ev.user, ev.reason || "wasn't in the group");
         } else if (ev.status === "skipped") {

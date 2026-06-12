@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Offboard preview - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Bulk offboard preview</h1>
+    <a class="btn btn-secondary" href="{{ url_for('main.offboard_upload_page') }}">Upload a different file</a>
+  </div>
+  <p class="muted">
+    Found <b>{{ total }}</b> unique email address(es) in the upload.
+    Apply will remove each matched account from <b>every group</b> it belongs
+    to. Accounts are not deleted &mdash; only the memberships (and optionally
+    the sign-in) are revoked.
+  </p>
+
+  <div class="report-toolbar">
+    <label class="checkbox">
+      <input type="checkbox" id="disable-accounts">
+      <span>Also <b>disable</b> each Entra account
+            <small>(accountEnabled = false; can be re-enabled in Entra)</small>
+      </span>
+    </label>
+    <button type="button" class="btn btn-primary" id="apply-btn">Offboard {{ total }} account(s)</button>
+  </div>
+
+  <div class="bulk-panel" id="offboard-panel" hidden></div>
+
+  <details class="offboard-list-details">
+    <summary class="muted">Show the email list ({{ total }})</summary>
+    <ol class="offboard-emails mono">
+      {% for email in emails %}<li>{{ email }}</li>{% endfor %}
+    </ol>
+  </details>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var applyBtn = document.getElementById("apply-btn");
+  var disableAccounts = document.getElementById("disable-accounts");
+  var panel = document.getElementById("offboard-panel");
+  var UPLOAD_ID = {{ upload_id | tojson }};
+  var TOTAL = {{ total }};
+
+  applyBtn.addEventListener("click", function () {
+    var alsoDisable = disableAccounts.checked;
+    var body =
+      "About to remove <b>" + TOTAL + "</b> account(s) from <b>every group</b> " +
+      "they belong to" +
+      (alsoDisable
+        ? " <b>and disable</b> their Entra sign-in."
+        : ".") +
+      " This runs against your live Entra tenant. " +
+      "Cancel button is available mid-flight; items already finished are not rolled back.";
+    kfcConfirm({
+      title: alsoDisable ? "Offboard &amp; disable " + TOTAL + " account(s)?" : "Offboard " + TOTAL + " account(s)?",
+      bodyHtml: body,
+      confirmLabel: alsoDisable ? "Offboard &amp; disable" : "Offboard now",
+    }).then(function (ok) {
+      if (!ok) return;
+      kfcBusy(applyBtn, true);
+      kfcRunBulk({
+        url: {{ url_for('main.offboard_apply_stream') | tojson }},
+        method: "POST",
+        body: { upload_id: UPLOAD_ID, disable_accounts: alsoDisable },
+        panel: panel,
+        verb: "Offboarding",
+        failuresCsvName: "offboard-failures.csv",
+        onDone: function () { kfcBusy(applyBtn, false); },
+      });
+    });
+  });
+})();
+</script>
+{% endblock %}

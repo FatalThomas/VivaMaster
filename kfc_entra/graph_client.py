@@ -437,3 +437,7 @@ class GraphClient:
                 return "not_in_group"
             raise
 
+    def disable_user(self, user_id: str) -> None:
+        """Soft-delete: set accountEnabled to false. User is preserved in Entra."""
+        self.update_user(user_id, {"accountEnabled": False})
+
