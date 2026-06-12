@@ -351,10 +351,45 @@
     }
   }
 
+  /* ---------- top-of-page loading banner ----------
+     Used while navigating to slow pages (Users / Groups) so the
+     8-second first-load doesn't feel like the app froze. The current
+     page keeps showing this banner until the new page replaces the DOM,
+     and it auto-fades after the duration if the new page never arrives. */
+  function kfcLoadingBanner(message, durationMs) {
+    var existing = document.querySelector(".loading-banner");
+    if (existing) existing.remove();
+    var el = document.createElement("div");
+    el.className = "loading-banner";
+    el.innerHTML = '<span class="spinner spinner-sm"></span> ' +
+      String(message == null ? "" : message)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    document.body.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add("loading-banner-show"); });
+    setTimeout(function () {
+      el.classList.remove("loading-banner-show");
+      setTimeout(function () { el.remove(); }, 300);
+    }, durationMs || 5000);
+  }
+
+  /* Auto-fire the banner whenever the user clicks a link to /users.
+     Skips middle-click / cmd-click / ctrl-click so new-tab opens don't
+     show the banner on the current page. */
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest("a");
+    if (!a) return;
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (a.target === "_blank") return;
+    if (a.pathname === "/users") {
+      kfcLoadingBanner("Loading Users page…", 5000);
+    }
+  });
+
   window.kfcToast = kfcToast;
   window.kfcConfirm = kfcConfirm;
   window.kfcStream = kfcStream;
   window.kfcRunBulk = kfcRunBulk;
   window.kfcBusy = kfcBusy;
   window.kfcDownloadCsv = kfcDownloadCsv;
+  window.kfcLoadingBanner = kfcLoadingBanner;
 })();

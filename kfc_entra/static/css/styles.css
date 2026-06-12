@@ -855,3 +855,34 @@ a:hover { text-decoration: underline; }
 }
 .chip-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .crown { color: #7a3edb; font-size: 14px; }
+
+/* Top-of-page loading banner (kfcLoadingBanner) */
+.loading-banner {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  background: var(--ink);
+  color: white;
+  padding: 10px 22px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .22);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 0;
+  transform: translateX(-50%) translateY(-12px);
+  transition: opacity .2s ease, transform .2s ease;
+  z-index: 300;
+  pointer-events: none;
+}
+.loading-banner-show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.loading-banner .spinner {
+  border-top-color: white;
+  border-color: rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+}
