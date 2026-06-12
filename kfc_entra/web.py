@@ -1405,6 +1405,15 @@ def create_app() -> Flask:
     app.config["KFC_CONFIG"] = cfg
     app.secret_key = cfg.flask_secret_key
 
+    # The failures CSV download POSTs the rows back through /downloads/csv
+    # as a form field. A 50k-row report's failure list can easily be
+    # several MB, so raise both the total request cap (MAX_CONTENT_LENGTH)
+    # and the per-field cap (MAX_FORM_MEMORY_SIZE) - Werkzeug's defaults
+    # would 413 with "Request Entity Too Large" on anything sizeable.
+    # 200MB is way more than any realistic report.
+    app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
+    app.config["MAX_FORM_MEMORY_SIZE"] = 200 * 1024 * 1024
+
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
 
