@@ -41,11 +41,19 @@ from .bulk import (
     parse_offboard_emails,
 )
 from .graph_client import GraphClient, GraphError
-from .mappings import delete_mapping, load_mappings, save_mapping
+from .mappings import (
+    delete_mapping,
+    delete_store_mapping,
+    load_mappings,
+    load_store_mappings,
+    save_mapping,
+    save_store_mapping,
+)
 from .report import (
     EmployeeRow,
     ReportParseError,
     group_by_franchisee,
+    group_by_store,
     parse_report,
 )
 from .updates import (
@@ -607,6 +615,134 @@ def report_apply_stream():
             include_unknown=include_unknown,
             remove_missing=remove_missing,
             delete_missing=delete_missing,
+        )
+    )
+
+
+# ---------- store mode preview & apply ----------
+def _five_nearest_groups(query: str, all_groups, top_n: int = 5):
+    """Return up to top_n group dicts whose displayName is closest to query.
+
+    Scores against both "KFC <query>" and bare "<query>" so a store called
+    "Salamander Bay" finds a group called "Salamander Bay" even when the
+    KFC- prefix is missing.
+    """
+    import difflib
+
+    q_lower = (query or "").strip().lower()
+    if not q_lower:
+        return []
+    targets = (q_lower, f"kfc {q_lower}")
+    scored = []
+    for g in all_groups:
+        name = (g.display_name or "").strip()
+        if not name:
+            continue
+        name_lower = name.lower()
+        best = max(difflib.SequenceMatcher(None, t, name_lower).ratio() for t in targets)
+        scored.append((best, g))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [
+        {"id": g.id, "name": g.display_name, "score": round(score, 2)}
+        for score, g in scored[:top_n]
+        if score > 0.3
+    ]
+
+
+@main_bp.route("/report/preview/<upload_id>/stores")
+@login_required
+def report_preview_stores(upload_id: str):
+    """Render the store-mode preview of an already-uploaded report."""
+    rows = _load_upload(upload_id)
+    if rows is None:
+        flash("Upload expired or not found - please re-upload the report.", "error")
+        return redirect(url_for("main.report_upload_page"))
+
+    stores = group_by_store(rows)
+    saved = load_store_mappings()["mappings"]
+
+    groups_json: list[dict] = []
+    groups_error = None
+    all_groups = []
+    client = GraphClient(get_access_token())
+    try:
+        all_groups = client.list_groups()
+        groups_json = [{"id": g.id, "name": g.display_name} for g in all_groups]
+    except GraphError as exc:
+        groups_error = exc.message
+
+    # Per-store: expected "KFC <store>" target + exact match + 5-nearest fallback.
+    name_to_group = {g.display_name: g for g in all_groups if g.display_name}
+    store_info: dict[str, dict] = {}
+    for key, sg in stores.items():
+        if sg.is_unknown:
+            store_info[key] = {
+                "expected_name": sg.expected_group_name,
+                "exact_match": None,
+                "suggestions": [],
+                "saved_mapping": None,
+            }
+            continue
+        expected = sg.expected_group_name
+        exact = name_to_group.get(expected)
+        store_info[key] = {
+            "expected_name": expected,
+            "exact_match": ({"id": exact.id, "name": exact.display_name} if exact else None),
+            "suggestions": [] if exact else _five_nearest_groups(sg.name, all_groups),
+            "saved_mapping": saved.get(sg.name),
+        }
+
+    return render_template(
+        "report_preview_stores.html",
+        user=current_user(),
+        upload_id=upload_id,
+        stores=stores,
+        store_info=store_info,
+        total_rows=len(rows),
+        groups_json=groups_json,
+        groups_error=groups_error,
+    )
+
+
+@main_bp.route("/report/apply-stores/stream", methods=["POST"])
+@login_required
+def report_apply_stores_stream():
+    """SSE stream that applies Store -> Group assignments to a parsed upload."""
+    payload = request.get_json(silent=True) or {}
+    upload_id = payload.get("upload_id") or ""
+    rows = _load_upload(upload_id)
+    if rows is None:
+        return _sse_response(
+            [{"type": "error",
+              "message": "Upload expired or not found - please re-upload the report."}]
+        )
+    assignments = payload.get("assignments") or {}
+    if not isinstance(assignments, dict):
+        assignments = {}
+    include_unknown = bool(payload.get("include_unknown"))
+    remove_missing = bool(payload.get("remove_missing"))
+    delete_missing = bool(payload.get("delete_missing"))
+    promote_community_admins = bool(payload.get("promote_community_admins"))
+    if delete_missing and not remove_missing:
+        delete_missing = False
+
+    # Persist the chosen store mappings so the next upload remembers them.
+    for store, mapping in assignments.items():
+        gid = (mapping.get("group_id") or "").strip()
+        gname = (mapping.get("group_name") or "").strip()
+        if gid and gname:
+            save_store_mapping(store, gid, gname)
+
+    client = GraphClient(get_access_token())
+    return _sse_response(
+        iter_apply_mappings(
+            client, rows,
+            assignments=assignments,
+            include_unknown=include_unknown,
+            remove_missing=remove_missing,
+            delete_missing=delete_missing,
+            grouping="store",
+            promote_community_admins=promote_community_admins,
         )
     )
 

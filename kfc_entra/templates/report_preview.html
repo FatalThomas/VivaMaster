@@ -3,8 +3,13 @@
 {% block content %}
 <section class="panel">
   <div class="panel-head">
-    <h1>Report preview</h1>
-    <a class="btn btn-secondary" href="{{ url_for('main.report_upload_page') }}">Upload a different file</a>
+    <h1>Report preview <span class="muted" style="font-size: 14px;">&middot; by Franchisee</span></h1>
+    <div class="panel-head-actions">
+      <a class="btn btn-secondary"
+         href="{{ url_for('main.report_preview_stores', upload_id=upload_id) }}"
+         title="Apply this same upload by Store group instead">Switch to Store mode &rarr;</a>
+      <a class="btn btn-secondary" href="{{ url_for('main.report_upload_page') }}">Upload a different file</a>
+    </div>
   </div>
   <p class="muted">
     Parsed <b>{{ total_rows }}</b> row(s) from <b>{{ filename }}</b> across

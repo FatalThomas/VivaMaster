@@ -20,7 +20,7 @@ from typing import Iterable, Iterator
 from .graph_client import GraphClient, GraphError, GraphUser
 from .groups import ensure_group
 from .mappings import save_mapping
-from .report import EmployeeRow
+from .report import EmployeeRow, is_community_admin_role
 
 
 def _user_label(user: GraphUser) -> str:
@@ -111,8 +111,18 @@ def iter_apply_mappings(
     include_unknown: bool = False,
     remove_missing: bool = False,
     delete_missing: bool = False,
+    grouping: str = "franchisee",
+    promote_community_admins: bool = False,
 ) -> Iterator[dict]:
-    """Add (and optionally remove + delete) report rows from Franchisee groups.
+    """Add (and optionally remove + delete) report rows from per-bucket groups.
+
+    ``grouping`` decides which column gives the bucket key:
+      * "franchisee" (default) - row.franchisee, normalised to UPPERCASE
+      * "store"                - row.store, preserved verbatim
+    ``promote_community_admins`` only fires in store mode: after each
+    successful batch-add, any user whose row.job_role is in
+    COMMUNITY_ADMIN_ROLES is also promoted to a group owner (the Viva
+    Engage "community admin" role), batched 20 at a time via Graph $batch.
 
     ``assignments`` maps Franchisee code -> {"group_id": str|None,
     "group_name": str}. Codes mapped to a name without an id get the group
@@ -126,10 +136,17 @@ def iter_apply_mappings(
     rows = list(parsed_rows)
 
     # --- resolve / create groups per Franchisee --------------------------
-    yield {"type": "phase", "message": "Resolving Franchisee groups..."}
+    bucket_label = "Store" if grouping == "store" else "Franchisee"
+    yield {"type": "phase", "message": f"Resolving {bucket_label} groups..."}
+
+    def _normalise_code(c: str) -> str:
+        # Franchisee codes are upper-case ("ANR", "BWF"); store names are
+        # left verbatim so "Salamander Bay" stays "Salamander Bay".
+        return c.strip() if grouping == "store" else c.strip().upper()
+
     resolved: dict[str, dict] = {}
     for code, assignment in assignments.items():
-        code = code.strip().upper()
+        code = _normalise_code(code)
         group_id = (assignment.get("group_id") or "").strip()
         group_name = (assignment.get("group_name") or "").strip()
         if not group_id and not group_name:
@@ -157,11 +174,23 @@ def iter_apply_mappings(
     # we summarise the count once instead of emitting a per-row "skipped"
     # event, which previously made it look like the apply was running
     # against every user in the report.
+    def _row_code(row: EmployeeRow) -> str:
+        if grouping == "store":
+            return (row.store or "UNKNOWN").strip()
+        return (row.franchisee or "UNK").strip().upper()
+
+    def _row_is_corporate(row: EmployeeRow) -> bool:
+        # Skip-by-default rows: blank / UNK / UNKNOWN buckets that don't
+        # represent a real place users should be added to.
+        if grouping == "store":
+            return _row_code(row).upper() in {"", "UNK", "UNKNOWN"}
+        return row.is_unknown
+
     work: list[EmployeeRow] = []
     untouched_by_code: dict[str, int] = {}
     for row in rows:
-        code = (row.franchisee or "UNK").strip().upper()
-        if row.is_unknown and not include_unknown:
+        code = _row_code(row)
+        if _row_is_corporate(row) and not include_unknown:
             untouched_by_code[code] = untouched_by_code.get(code, 0) + 1
             continue
         if code not in resolved:
@@ -191,7 +220,7 @@ def iter_apply_mappings(
     skipped_no_user: list[dict] = []
     email_cache: dict[str, str | None] = {}
     for row in work:
-        code = (row.franchisee or "UNK").strip().upper()
+        code = _row_code(row)
         label = row.email or row.name or f"row {row.row_number}"
         target = resolved[code]  # guaranteed - we filtered to mapped-only
 
@@ -215,6 +244,15 @@ def iter_apply_mappings(
             pending.append({
                 "code": code, "label": label,
                 "user_id": user_id, "group_id": target["group_id"],
+                # Promote later if this row holds a community-admin role and
+                # the caller opted in. Job role is normalised so
+                # "Assistant Manager" / "assistant manager" / "Assistant  Manager"
+                # all map to the same canonical key.
+                "is_admin": (
+                    promote_community_admins
+                    and grouping == "store"
+                    and is_community_admin_role(row.job_role)
+                ),
             })
 
     total_skipped = len(skipped_no_user)
@@ -274,8 +312,9 @@ def iter_apply_mappings(
                     "label": item["label"],
                 })
     total_deletes = len(unique_users_to_delete)
+    total_promotes = sum(1 for p in pending if p.get("is_admin")) if promote_community_admins else 0
 
-    total = total_skipped + total_adds + total_removes + total_deletes
+    total = total_skipped + total_adds + total_promotes + total_removes + total_deletes
     yield {"type": "start", "total": total}
 
     per_franchisee: dict[str, dict] = {}
@@ -289,6 +328,7 @@ def iter_apply_mappings(
                 "added": 0, "already_member": 0, "skipped": 0, "failed": 0,
                 "removed": 0, "not_in_group": 0,
                 "deleted": 0, "already_gone": 0,
+                "owner_added": 0, "already_owner": 0,
             },
         )
 
@@ -334,6 +374,56 @@ def iter_apply_mappings(
                     "status": outcome,
                     "reason": "Already in the group" if outcome == "already_member" else reason,
                 }
+
+    # --- batch-promote owners (Viva Engage "community admins"): RGM / AM /
+    # AM Trainee / RGM Trainee from store mode get added as group owners,
+    # batched 20 at a time. Independent of add success: a freshly-added
+    # user can also be flagged as owner in the same pass, and an
+    # already_member user can still be promoted.
+    if promote_community_admins and total_promotes:
+        yield {
+            "type": "phase",
+            "message": f"Promoting {total_promotes} community admin(s) to group owner...",
+        }
+        admins_by_group: dict[str, list[dict]] = {}
+        for item in pending:
+            if item.get("is_admin"):
+                admins_by_group.setdefault(item["group_id"], []).append(item)
+        for group_id, items in admins_by_group.items():
+            for i in range(0, len(items), BATCH_SIZE):
+                chunk = items[i : i + BATCH_SIZE]
+                user_ids = [c["user_id"] for c in chunk]
+                try:
+                    results = client.batch_add_owners_to_group(group_id, user_ids)
+                except GraphError as exc:
+                    results = {uid: ("failed", exc.message) for uid in user_ids}
+                for c in chunk:
+                    emitted += 1
+                    outcome, reason = results.get(c["user_id"], ("failed", "No batch response for this user"))
+                    # Map Graph's "added"/"already_owner" to owner-specific
+                    # outcome labels BEFORE the stats bucket so the
+                    # per-Franchisee table and summary tiles count
+                    # promotions separately from member-adds.
+                    if outcome == "added":
+                        outcome = "owner_added"
+                    stats = bucket(c["code"])
+                    stats[outcome] = stats.get(outcome, 0) + 1
+                    if outcome == "failed":
+                        failures.append({
+                            "user": c["label"], "franchisee": c["code"],
+                            "reason": reason, "action": "promote",
+                        })
+                    yield {
+                        "type": "progress", "current": emitted, "total": total,
+                        "franchisee": c["code"], "user": c["label"],
+                        "status": outcome,
+                        "reason": (
+                            "Already an owner / community admin"
+                            if outcome == "already_owner"
+                            else reason if outcome == "failed"
+                            else "Promoted to group owner (community admin)"
+                        ),
+                    }
 
     # --- batch-remove: 20 per Graph round-trip via $batch (DELETE/$ref).
     if removals_by_group:
@@ -413,7 +503,8 @@ def iter_apply_mappings(
 
     totals = {"added": 0, "already_member": 0, "skipped": 0, "failed": 0,
               "removed": 0, "not_in_group": 0,
-              "deleted": 0, "already_gone": 0}
+              "deleted": 0, "already_gone": 0,
+              "owner_added": 0, "already_owner": 0}
     for stats in per_franchisee.values():
         for key in totals:
             totals[key] += stats.get(key, 0)

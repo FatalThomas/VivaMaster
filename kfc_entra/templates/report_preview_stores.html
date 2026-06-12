@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}Apply by Store - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Apply by Store</h1>
+    <div class="panel-head-actions">
+      <a class="btn btn-secondary" href="{{ url_for('main.report_upload_page') }}">Upload a different file</a>
+    </div>
+  </div>
+
+  <p class="muted">
+    One row per <b>Store</b> from the report. The expected Entra group name
+    is <b>"KFC " + Store</b>; when it isn't found we suggest the 5 nearest
+    existing groups so a "Salamander Bay" missing its KFC- prefix is easy to
+    spot.
+  </p>
+
+  {% if groups_error %}
+    <div class="flash flash-warning">
+      Couldn't load Entra groups: {{ groups_error }}. You can still type a
+      group name to create it.
+    </div>
+  {% endif %}
+
+  <div class="report-toolbar">
+    <label class="checkbox">
+      <input type="checkbox" id="include-unknown">
+      <span>Include UNKNOWN store rows (corporate &ndash; skipped by default)</span>
+    </label>
+    <label class="checkbox">
+      <input type="checkbox" id="promote-admins" checked>
+      <span>Promote <b>RGM</b> / <b>RGM Trainee</b> / <b>Assistant Manager</b> /
+            <b>Assistant Manager Trainee</b> to group owner
+            <small>(Viva Engage community admin)</small>
+      </span>
+    </label>
+    <label class="checkbox">
+      <input type="checkbox" id="remove-missing">
+      <span>Also <b>remove</b> users from each group who aren't in this report
+            <small>(reconcile)</small>
+      </span>
+    </label>
+    <label class="checkbox checkbox-nested" id="delete-missing-label">
+      <input type="checkbox" id="delete-missing" disabled>
+      <span>&hellip; and also <b>delete</b> those users from the tenant
+            <small>(recoverable for 30 days from Entra &gt; Deleted users)</small>
+      </span>
+    </label>
+    <button type="button" class="btn btn-primary" id="apply-btn">Apply to Store groups</button>
+  </div>
+
+  <div class="bulk-panel" id="apply-panel" hidden></div>
+
+  <div class="store-list">
+    {% for key, sg in stores.items() %}
+    {% set info = store_info.get(key, {}) %}
+    <div class="store-row" data-store="{{ sg.name }}" {% if sg.is_unknown %}data-unknown="1"{% endif %}>
+      <div class="store-head">
+        <div class="store-id">
+          <b class="store-name">{{ sg.name or 'UNKNOWN' }}</b>
+          <span class="muted store-meta">Expected group: <code>{{ info.expected_name }}</code>
+            {% if sg.franchisee %}&middot; Franchisee {{ sg.franchisee }}{% endif %}
+          </span>
+        </div>
+        <div class="store-counts">
+          <span class="badge">{{ sg.rows | length }} rows</span>
+          <span class="badge badge-ready">{{ sg.ready_count }} in Entra</span>
+          {% if sg.missing_entra_count %}
+            <span class="badge badge-missing">{{ sg.missing_entra_count }} not provisioned</span>
+          {% endif %}
+          {% if sg.admin_count %}
+            <span class="badge badge-admin">{{ sg.admin_count }} community admin{% if sg.admin_count != 1 %}s{% endif %}</span>
+          {% endif %}
+          {% if sg.is_unknown %}
+            <span class="badge badge-skip" data-role="skip-badge">skipped</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="store-mapping">
+        <select class="store-select"
+                data-store="{{ sg.name }}"
+                data-expected="{{ info.expected_name }}"
+                {% if sg.is_unknown %}disabled{% endif %}>
+          {% if info.exact_match %}
+            <option value="{{ info.exact_match.id }}|{{ info.exact_match.name }}"
+                    data-kind="exact" selected>&#10003; {{ info.exact_match.name }} (exact match)</option>
+          {% endif %}
+          {% if info.saved_mapping and (not info.exact_match or info.saved_mapping.group_id != info.exact_match.id) %}
+            <option value="{{ info.saved_mapping.group_id }}|{{ info.saved_mapping.group_name }}"
+                    data-kind="saved" {% if not info.exact_match %}selected{% endif %}>&#9733; {{ info.saved_mapping.group_name }} (saved mapping)</option>
+          {% endif %}
+          {% if not info.exact_match and not info.saved_mapping %}
+            <option value="__create__|{{ info.expected_name }}"
+                    data-kind="create" selected>&#43; Create new <b>{{ info.expected_name }}</b></option>
+          {% else %}
+            <option value="__create__|{{ info.expected_name }}"
+                    data-kind="create">&#43; Create new <b>{{ info.expected_name }}</b></option>
+          {% endif %}
+          {% if info.suggestions %}
+            <optgroup label="Looks similar:">
+              {% for s in info.suggestions %}
+                <option value="{{ s.id }}|{{ s.name }}"
+                        data-kind="suggestion">&#8594; {{ s.name }} ({{ (s.score * 100) | int }}% match)</option>
+              {% endfor %}
+            </optgroup>
+          {% endif %}
+          <option value="__skip__|" data-kind="skip">&#10006; Skip this store</option>
+        </select>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var UPLOAD_ID = {{ upload_id | tojson }};
+  var includeUnknown = document.getElementById("include-unknown");
+  var promoteAdmins = document.getElementById("promote-admins");
+  var removeMissing = document.getElementById("remove-missing");
+  var deleteMissing = document.getElementById("delete-missing");
+  var deleteMissingLabel = document.getElementById("delete-missing-label");
+  var applyBtn = document.getElementById("apply-btn");
+  var panel = document.getElementById("apply-panel");
+
+  function syncDeleteState() {
+    var on = removeMissing.checked;
+    deleteMissing.disabled = !on;
+    deleteMissingLabel.classList.toggle("checkbox-disabled", !on);
+    if (!on) deleteMissing.checked = false;
+  }
+  removeMissing.addEventListener("change", syncDeleteState);
+  syncDeleteState();
+
+  includeUnknown.addEventListener("change", function () {
+    document.querySelectorAll('.store-row[data-unknown] .store-select').forEach(function (sel) {
+      sel.disabled = !includeUnknown.checked;
+    });
+    document.querySelectorAll('.store-row[data-unknown] [data-role=skip-badge]').forEach(function (b) {
+      b.textContent = includeUnknown.checked ? "opted in" : "skipped";
+    });
+  });
+
+  function buildAssignments() {
+    var out = {};
+    document.querySelectorAll(".store-select").forEach(function (sel) {
+      if (sel.disabled) return;
+      var store = sel.dataset.store;
+      if (!store) return;
+      var val = sel.value || "";
+      var parts = val.split("|");
+      var idPart = parts[0] || "";
+      var namePart = parts.slice(1).join("|") || sel.dataset.expected;
+      if (idPart === "__skip__" || !val) return;
+      if (idPart === "__create__") {
+        out[store] = { group_id: "", group_name: namePart };
+      } else {
+        out[store] = { group_id: idPart, group_name: namePart };
+      }
+    });
+    return out;
+  }
+
+  applyBtn.addEventListener("click", function () {
+    var assignments = buildAssignments();
+    var mapped = Object.keys(assignments).length;
+    if (!mapped) {
+      kfcToast("Pick a group (or 'Create new') for at least one Store.", "warning");
+      return;
+    }
+    var promote = promoteAdmins.checked;
+    var reconcile = removeMissing.checked;
+    var purge = reconcile && deleteMissing.checked;
+
+    var body =
+      "About to add report users to <b>" + mapped + "</b> Store group(s)" +
+      (promote ? " and promote RGMs / Assistant Managers to <b>community admin</b> (group owner)" : "") +
+      (purge
+        ? ". Reconcile + delete is ON: users currently in any mapped group but " +
+          "not in this report will be removed and then deleted from the tenant " +
+          "(30-day recovery via Entra &gt; Deleted users)."
+        : reconcile
+        ? ". Reconcile is ON: users currently in any mapped group but not in " +
+          "this report will be removed from that group."
+        : ".");
+
+    kfcConfirm({
+      title: purge ? "Apply, reconcile &amp; delete?" : reconcile ? "Apply &amp; reconcile?" : "Apply by Store?",
+      bodyHtml: body,
+      confirmLabel: purge ? "Apply, reconcile &amp; delete" : reconcile ? "Apply &amp; reconcile" : "Apply now",
+    }).then(function (ok) {
+      if (!ok) return;
+      kfcBusy(applyBtn, true);
+      kfcRunBulk({
+        url: {{ url_for('main.report_apply_stores_stream') | tojson }},
+        method: "POST",
+        body: {
+          upload_id: UPLOAD_ID,
+          include_unknown: includeUnknown.checked,
+          promote_community_admins: promote,
+          remove_missing: reconcile,
+          delete_missing: purge,
+          assignments: assignments,
+        },
+        panel: panel,
+        verb: purge ? "Reconciling + deleting" : reconcile ? "Reconciling" : (promote ? "Adding + promoting" : "Adding"),
+        failuresCsvName: "store-apply-failures.csv",
+        onDone: function () { kfcBusy(applyBtn, false); },
+      });
+    });
+  });
+})();
+</script>
+{% endblock %}

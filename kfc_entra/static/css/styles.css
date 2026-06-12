@@ -776,3 +776,43 @@ a:hover { text-decoration: underline; }
 .checkbox-disabled span,
 .checkbox-disabled span small { color: var(--muted); }
 .checkbox-disabled input { cursor: not-allowed; }
+
+/* Store-mode preview (report_preview_stores.html) */
+.store-list { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.store-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: white;
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  align-items: center;
+}
+.store-row[data-unknown] { opacity: 0.7; background: var(--bg); }
+.store-head { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.store-id { display: flex; flex-direction: column; gap: 2px; }
+.store-name { font-size: 15px; }
+.store-meta { font-size: 12px; }
+.store-meta code {
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.store-counts { display: flex; flex-wrap: wrap; gap: 6px; }
+.store-mapping { display: flex; flex-direction: column; gap: 4px; }
+.store-select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  background: white;
+}
+.store-select:focus { outline: 2px solid var(--kfc-red); outline-offset: 1px; }
+.store-select:disabled { background: var(--bg); cursor: not-allowed; }
+.badge-admin { background: #e7e2fb; color: #5727b8; }
+.badge-ready { background: #d6f5e0; color: var(--ok); }
+.badge-missing { background: #fde7c8; color: var(--warn); }
+.badge-skip   { background: var(--line); color: var(--muted); }

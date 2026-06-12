@@ -193,6 +193,10 @@
           logLine("line-skip", "✓ " + ev.user, "already in the group");
         } else if (ev.status === "removed") {
           logLine("line-ok", "− " + ev.user, ev.reason || "removed from the group");
+        } else if (ev.status === "owner_added") {
+          logLine("line-ok", "♛ " + ev.user, ev.reason || "promoted to community admin");
+        } else if (ev.status === "already_owner") {
+          logLine("line-skip", "♛ " + ev.user, ev.reason || "already an owner");
         } else if (ev.status === "disabled") {
           logLine("line-ok", "⊘ " + ev.user, ev.reason || "account disabled");
         } else if (ev.status === "deleted") {
@@ -228,12 +232,17 @@
       var ok = summary.succeeded !== undefined ? summary.succeeded : (summary.added || 0);
       var hasRemoves = (summary.removed || 0) + (summary.not_in_group || 0) > 0;
       var hasDeletes = (summary.deleted || 0) + (summary.already_gone || 0) > 0;
+      var hasOwners  = (summary.owner_added || 0) + (summary.already_owner || 0) > 0;
       var failedList = summary.failures || [];
       var html =
         '<div class="summary-stats">' +
         '<div class="stat stat-ok"><b>' + ok + '</b><span>added</span></div>' +
         (summary.already_member !== undefined
           ? '<div class="stat stat-skip"><b>' + summary.already_member + '</b><span>already member</span></div>' : "") +
+        (summary.owner_added
+          ? '<div class="stat stat-ok"><b>' + summary.owner_added + '</b><span>promoted (admin)</span></div>' : "") +
+        (summary.already_owner
+          ? '<div class="stat stat-skip"><b>' + summary.already_owner + '</b><span>already admin</span></div>' : "") +
         (summary.removed
           ? '<div class="stat stat-ok"><b>' + summary.removed + '</b><span>removed</span></div>' : "") +
         (summary.not_in_group
@@ -248,7 +257,8 @@
         '<div class="stat"><b>' + summary.total + '</b><span>total</span></div>' +
         '</div>';
       if (summary.per_franchisee) {
-        var th = '<th>Franchisee</th><th>Added</th><th>Already</th>' +
+        var th = '<th>Bucket</th><th>Added</th><th>Already</th>' +
+                 (hasOwners  ? '<th>Promoted</th><th>Already admin</th>' : '') +
                  (hasRemoves ? '<th>Removed</th><th>Not in group</th>' : '') +
                  (hasDeletes ? '<th>Deleted</th><th>Already gone</th>' : '') +
                  '<th>Skipped</th><th>Failed</th>';
@@ -256,6 +266,7 @@
         Object.keys(summary.per_franchisee).sort().forEach(function (code) {
           var s = summary.per_franchisee[code];
           html += "<tr><td>" + code + "</td><td>" + (s.added||0) + "</td><td>" + (s.already_member||0) + "</td>";
+          if (hasOwners)  html += "<td>" + (s.owner_added||0) + "</td><td>" + (s.already_owner||0) + "</td>";
           if (hasRemoves) html += "<td>" + (s.removed||0) + "</td><td>" + (s.not_in_group||0) + "</td>";
           if (hasDeletes) html += "<td>" + (s.deleted||0) + "</td><td>" + (s.already_gone||0) + "</td>";
           html += "<td>" + (s.skipped||0) + "</td><td>" + (s.failed||0) + "</td></tr>";

@@ -120,6 +120,59 @@ class FranchiseeGroup:
         return [r.name for r in self.rows[:4] if r.name]
 
 
+# Job-role labels that promote a user to community admin (group owner) when
+# adding by Store. Compared case-insensitively, with whitespace normalised.
+COMMUNITY_ADMIN_ROLES = frozenset(
+    {
+        "rgm",
+        "rgm trainee",
+        "assistant manager",
+        "assistant manager trainee",
+    }
+)
+
+
+def is_community_admin_role(job_role: str) -> bool:
+    """True when this job role should make the user a group owner."""
+    if not job_role:
+        return False
+    return " ".join(job_role.split()).lower() in COMMUNITY_ADMIN_ROLES
+
+
+@dataclass
+class StoreGroup:
+    name: str
+    franchisee: str
+    rows: list[EmployeeRow] = field(default_factory=list)
+
+    @property
+    def is_unknown(self) -> bool:
+        # Stores like "UNKNOWN" or blank correspond to corporate rows that
+        # shouldn't be auto-mapped to a Store group.
+        return self.name.strip().upper() in UNKNOWN_CODES
+
+    @property
+    def ready_count(self) -> int:
+        return sum(1 for r in self.rows if r.in_entra)
+
+    @property
+    def missing_entra_count(self) -> int:
+        return len(self.rows) - self.ready_count
+
+    @property
+    def admin_count(self) -> int:
+        return sum(1 for r in self.rows if is_community_admin_role(r.job_role))
+
+    @property
+    def sample_names(self) -> list[str]:
+        return [r.name for r in self.rows[:4] if r.name]
+
+    @property
+    def expected_group_name(self) -> str:
+        """The Entra group name we'd expect for this store - 'KFC <store>'."""
+        return f"KFC {self.name}".strip()
+
+
 def _is_uuid(value: str) -> bool:
     try:
         uuid.UUID(value.strip())
@@ -261,3 +314,26 @@ def group_by_franchisee(rows: list[EmployeeRow]) -> dict[str, FranchiseeGroup]:
         group.rows.append(row)
     ordered = sorted(groups.values(), key=lambda g: (g.is_unknown, g.code))
     return {g.code: g for g in ordered}
+
+
+def group_by_store(rows: list[EmployeeRow]) -> dict[str, StoreGroup]:
+    """Group rows by Store name, blank/UNKNOWN stores last.
+
+    The Store name is preserved verbatim - case and spacing - because the
+    expected Entra group name is just "KFC " + the Store. Two rows with
+    the same Store value end up in the same bucket; rows with no Store
+    value are bucketed under "" so the caller can choose to skip them.
+    """
+    groups: dict[str, StoreGroup] = {}
+    for row in rows:
+        store = (row.store or "").strip()
+        key = store or "UNKNOWN"
+        group = groups.get(key)
+        if group is None:
+            group = StoreGroup(name=store, franchisee=row.franchisee or "")
+            groups[key] = group
+        if not group.franchisee and row.franchisee:
+            group.franchisee = row.franchisee
+        group.rows.append(row)
+    ordered = sorted(groups.values(), key=lambda g: (g.is_unknown, g.name.lower()))
+    return {(g.name or "UNKNOWN"): g for g in ordered}

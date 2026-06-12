@@ -410,7 +410,90 @@ class GraphClient:
             results.setdefault(uid, ("failed", "Graph $batch returned no response for this user."))
         return results
 
-    def list_user_groups(self, user_id: str) -> list[GraphGroup]:
+    # ---------- group owners (Viva Engage "community admins") ----------------
+    def list_group_owners(self, group_id: str) -> list[GraphUser]:
+        """Return every user owner of a group (paged). Filters to users only."""
+        params: dict[str, Any] = {
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$top": 999,
+        }
+        raw = self._collect_paged(
+            f"/groups/{group_id}/owners/microsoft.graph.user",
+            params=params,
+        )
+        return [GraphUser.from_api(u) for u in raw]
+
+    def add_owner_to_group(self, group_id: str, user_id: str) -> str:
+        """Promote a single user to group owner. Returns 'added' or 'already_owner'."""
+        body = {"@odata.id": f"{GRAPH_BASE}/users/{user_id}"}
+        try:
+            self._request("POST", f"/groups/{group_id}/owners/$ref", json=body)
+            return "added"
+        except GraphError as exc:
+            if exc.status == 400 and "already exist" in (exc.message or "").lower():
+                return "already_owner"
+            raise
+
+    def batch_add_owners_to_group(
+        self, group_id: str, user_ids: list[str]
+    ) -> dict[str, tuple[str, str]]:
+        """Add up to 20 users as owners via Graph $batch.
+
+        Returns {user_id: (outcome, reason)} - 'added' / 'already_owner' /
+        'failed'. Mirrors batch_add_members_to_group exactly except the
+        endpoint is /owners/$ref instead of /members/$ref.
+        """
+        if not user_ids:
+            return {}
+        if len(user_ids) > 20:
+            raise ValueError("Microsoft Graph $batch is limited to 20 requests.")
+
+        requests_body = [
+            {
+                "id": str(idx),
+                "method": "POST",
+                "url": f"/groups/{group_id}/owners/$ref",
+                "headers": {"Content-Type": "application/json"},
+                "body": {"@odata.id": f"{GRAPH_BASE}/users/{uid}"},
+            }
+            for idx, uid in enumerate(user_ids)
+        ]
+        resp = self._request("POST", "/$batch", json={"requests": requests_body})
+        results: dict[str, tuple[str, str]] = {}
+        for entry in resp.json().get("responses") or []:
+            try:
+                idx = int(entry.get("id", -1))
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= idx < len(user_ids):
+                continue
+            uid = user_ids[idx]
+            status = entry.get("status", 500)
+            if 200 <= status < 300 or status == 204:
+                results[uid] = ("added", "")
+                continue
+            body = entry.get("body") or {}
+            msg = (body.get("error") or {}).get("message", str(body))
+            if status == 400 and "already exist" in msg.lower():
+                results[uid] = ("already_owner", "")
+            else:
+                results[uid] = ("failed", msg)
+        for uid in user_ids:
+            results.setdefault(uid, ("failed", "Graph $batch returned no response for this user."))
+        return results
+
+    def remove_owner_from_group(self, group_id: str, user_id: str) -> str:
+        """Demote a user from group owner. Returns 'removed' or 'not_an_owner'."""
+        try:
+            self._request("DELETE", f"/groups/{group_id}/owners/{user_id}/$ref")
+            return "removed"
+        except GraphError as exc:
+            lower = (exc.message or "").lower()
+            if exc.status == 404 or "does not exist" in lower or "could not be found" in lower:
+                return "not_an_owner"
+            raise
+
+
         """Return every group the user is a direct member of (paged).
 
         Uses the `microsoft.graph.group` cast so directory roles and other

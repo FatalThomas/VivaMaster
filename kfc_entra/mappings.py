@@ -1,8 +1,13 @@
-"""Persistent Franchisee -> Entra Group mappings.
+"""Persistent Franchisee / Store -> Entra Group mappings.
 
 Stored as JSON in a per-user config dir:
-  - Windows:      %APPDATA%\\KFCEntraManager\\mappings.json
-  - macOS/Linux:  ~/.kfc_entra_manager/mappings.json
+  - Windows:      %APPDATA%\\KFCEntraManager\\
+  - macOS/Linux:  ~/.kfc_entra_manager/
+
+Franchisee mappings (uppercase codes like "ANR") live in mappings.json.
+Store mappings (verbatim store names like "Forster") live in
+store_mappings.json - the report's STORE column is the key, the Entra
+group id and name are the value.
 """
 from __future__ import annotations
 
@@ -24,13 +29,12 @@ def config_dir() -> Path:
     return Path.home() / ".kfc_entra_manager"
 
 
-def _mappings_path() -> Path:
-    return config_dir() / "mappings.json"
+def _path(filename: str) -> Path:
+    return config_dir() / filename
 
 
-def load_mappings() -> dict:
-    """Return {"version": 1, "mappings": {CODE: {...}}}. Never raises."""
-    path = _mappings_path()
+def _load(filename: str) -> dict:
+    path = _path(filename)
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -42,10 +46,9 @@ def load_mappings() -> dict:
         return {"version": _SCHEMA_VERSION, "mappings": {}}
 
 
-def _write(data: dict) -> None:
-    path = _mappings_path()
+def _write(filename: str, data: dict) -> None:
+    path = _path(filename)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic write: temp file in the same dir, then replace.
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -59,9 +62,24 @@ def _write(data: dict) -> None:
         raise
 
 
+def _normalise_franchisee(code: str) -> str:
+    return code.strip().upper()
+
+
+def _normalise_store(name: str) -> str:
+    # Stores are not upper-cased - "Forster" and "Salamander Bay" are read
+    # verbatim from the report and concatenated with "KFC " to form the
+    # group name. Just trim whitespace.
+    return name.strip()
+
+
+# ---------- Franchisee mappings (existing API; unchanged behaviour) ----------
+def load_mappings() -> dict:
+    return _load("mappings.json")
+
+
 def save_mapping(code: str, group_id: str, group_name: str) -> dict:
-    """Upsert one mapping and return the saved entry."""
-    code = code.strip().upper()
+    code = _normalise_franchisee(code)
     data = load_mappings()
     entry = {
         "group_id": group_id,
@@ -69,16 +87,43 @@ def save_mapping(code: str, group_id: str, group_name: str) -> dict:
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     data["mappings"][code] = entry
-    _write(data)
+    _write("mappings.json", data)
     return entry
 
 
 def delete_mapping(code: str) -> bool:
-    """Remove a mapping. Returns True when something was deleted."""
-    code = code.strip().upper()
+    code = _normalise_franchisee(code)
     data = load_mappings()
     if code in data["mappings"]:
         del data["mappings"][code]
-        _write(data)
+        _write("mappings.json", data)
+        return True
+    return False
+
+
+# ---------- Store mappings (new for the multi-mode report apply) ------------
+def load_store_mappings() -> dict:
+    return _load("store_mappings.json")
+
+
+def save_store_mapping(store: str, group_id: str, group_name: str) -> dict:
+    store = _normalise_store(store)
+    data = load_store_mappings()
+    entry = {
+        "group_id": group_id,
+        "group_name": group_name,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    data["mappings"][store] = entry
+    _write("store_mappings.json", data)
+    return entry
+
+
+def delete_store_mapping(store: str) -> bool:
+    store = _normalise_store(store)
+    data = load_store_mappings()
+    if store in data["mappings"]:
+        del data["mappings"][store]
+        _write("store_mappings.json", data)
         return True
     return False
