@@ -23,6 +23,10 @@ import uuid
 from dataclasses import dataclass, field
 
 XLSX_MAGIC = b"PK\x03\x04"
+# OLE-2 Compound Document magic - shared by the binary BIFF .xls format,
+# .doc, .ppt, etc. If we see this in a file labelled .xls (or any file
+# with no extension) we try xlrd before giving up.
+XLS_MAGIC = b"\xd0\xcf\x11\xe0"
 UNKNOWN_CODES = {"", "UNK", "UNKNOWN"}
 
 # normalised header -> EmployeeRow attribute
@@ -426,6 +430,43 @@ def _parse_xlsx(data: bytes) -> list[list[str]]:
     return table
 
 
+def _parse_xls(data: bytes) -> list[list[str]]:
+    """Read a legacy .xls (BIFF / OLE-2 Compound Document) workbook via xlrd.
+
+    xlrd 2.0+ dropped .xls support, so we pin to 1.2.0 in requirements.
+    """
+    try:
+        import xlrd
+    except ImportError as exc:  # pragma: no cover
+        raise ReportParseError(
+            "xlrd is not installed - cannot read .xls files. "
+            "Re-save the file as .xlsx in Excel and re-upload."
+        ) from exc
+    try:
+        book = xlrd.open_workbook(file_contents=data, formatting_info=False)
+    except Exception as exc:
+        raise ReportParseError(f"Could not open the .xls file: {exc}") from exc
+    sheet = book.sheet_by_index(0)
+    table: list[list[str]] = []
+    for r in range(sheet.nrows):
+        row = []
+        for c in range(sheet.ncols):
+            cell = sheet.cell(r, c)
+            value = cell.value
+            # xlrd returns dates as floats - keep them as-is; the parser
+            # downstream only cares about text columns. Numbers become
+            # their string form so "1300" stays "1300" not "1300.0".
+            if isinstance(value, float) and value.is_integer():
+                value = str(int(value))
+            elif value is None:
+                value = ""
+            else:
+                value = str(value)
+            row.append(value)
+        table.append(row)
+    return table
+
+
 def _parse_delimited(data: bytes) -> list[list[str]]:
     for encoding in ("utf-8-sig", "utf-8", "latin-1"):
         try:
@@ -449,18 +490,27 @@ def _parse_delimited(data: bytes) -> list[list[str]]:
 
 
 def parse_report(data: bytes, filename: str) -> tuple[list[EmployeeRow], RowFilterStats]:
-    """Parse CSV / TSV / XLSX bytes into normalised EmployeeRows + filter stats.
+    """Parse CSV / TSV / XLS / XLSX bytes into normalised EmployeeRows + filter stats.
 
-    Detection: file extension first, then content sniff (XLSX files start
-    with the ZIP magic ``PK\\x03\\x04``).
+    Detection: file extension first, then content sniff:
+      - ``PK\\x03\\x04`` -> XLSX / XLSM (ZIP-based OOXML)
+      - ``\\xd0\\xcf\\x11\\xe0`` -> legacy .xls (OLE-2 compound document)
+      - everything else -> delimited text
     """
     if not data:
         raise ReportParseError("The uploaded file is empty.")
     name = (filename or "").lower()
-    looks_xlsx = name.endswith((".xlsx", ".xlsm")) or data[:4] == XLSX_MAGIC
-    if name.endswith((".csv", ".tsv", ".txt")) and data[:4] != XLSX_MAGIC:
-        looks_xlsx = False
-    table = _parse_xlsx(data) if looks_xlsx else _parse_delimited(data)
+    head = data[:4]
+    looks_xlsx = name.endswith((".xlsx", ".xlsm")) or head == XLSX_MAGIC
+    looks_xls = name.endswith(".xls") or head == XLS_MAGIC
+    if name.endswith((".csv", ".tsv", ".txt")) and head not in (XLSX_MAGIC, XLS_MAGIC):
+        looks_xlsx = looks_xls = False
+    if looks_xlsx:
+        table = _parse_xlsx(data)
+    elif looks_xls:
+        table = _parse_xls(data)
+    else:
+        table = _parse_delimited(data)
     return _rows_from_table(table)
 
 

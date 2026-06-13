@@ -3,5 +3,7 @@ msal>=1.28.0
 requests>=2.31.0
 python-dotenv>=1.0.0
 openpyxl>=3.1.0
+# xlrd 2.0+ dropped .xls (BIFF) support; pin to 1.2.0 for legacy Excel files.
+xlrd==1.2.0
 pywebview>=5.0.0
 pyinstaller>=6.5.0

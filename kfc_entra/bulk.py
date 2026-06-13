@@ -566,7 +566,7 @@ def iter_apply_mappings(
 # ============================================================================
 
 def parse_offboard_emails(content: bytes, filename: str) -> list[str]:
-    """Pull email addresses out of a CSV / TSV / XLSX file.
+    """Pull email addresses out of a CSV / TSV / XLS / XLSX file.
 
     Looks for a column whose header contains 'email', 'mail', or 'upn'
     (case-insensitive). If no such header exists, falls back to the first
@@ -576,15 +576,32 @@ def parse_offboard_emails(content: bytes, filename: str) -> list[str]:
     import io as _io
     import pathlib as _pl
     suffix = _pl.Path(filename or "").suffix.lower()
+    head = content[:4]
     rows: list[list[str]] = []
 
-    if suffix in (".xlsx", ".xlsm"):
+    if suffix in (".xlsx", ".xlsm") or head == b"PK\x03\x04":
         from openpyxl import load_workbook
         wb = load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
         ws = wb.active
         if ws is not None:
             for r in ws.iter_rows(values_only=True):
                 rows.append(["" if v is None else str(v) for v in r])
+    elif suffix == ".xls" or head == b"\xd0\xcf\x11\xe0":
+        import xlrd
+        book = xlrd.open_workbook(file_contents=content, formatting_info=False)
+        sheet = book.sheet_by_index(0)
+        for r in range(sheet.nrows):
+            row = []
+            for c in range(sheet.ncols):
+                v = sheet.cell(r, c).value
+                if isinstance(v, float) and v.is_integer():
+                    v = str(int(v))
+                elif v is None:
+                    v = ""
+                else:
+                    v = str(v)
+                row.append(v)
+            rows.append(row)
     else:
         text = content.decode("utf-8-sig", errors="replace")
         try:

@@ -12,6 +12,10 @@ hiddenimports = (
     collect_submodules("msal")
     + collect_submodules("webview")
     + collect_submodules("openpyxl")
+    # xlrd is imported lazily inside report.parse_report so PyInstaller's
+    # static analysis won't see it - bundle it explicitly so legacy .xls
+    # uploads work in the frozen exe.
+    + collect_submodules("xlrd")
 )
 
 datas = [

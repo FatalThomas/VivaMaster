@@ -7,7 +7,7 @@
     <a class="btn btn-secondary" href="{{ url_for('main.report_mappings') }}">Manage mappings</a>
   </div>
   <p class="muted">
-    Upload the employee Yammer status report (CSV, TSV, or XLSX). The app groups
+    Upload the employee Yammer status report (CSV, TSV, XLS, or XLSX). The app groups
     rows by <b>Franchisee</b>, lets you map each one to an Entra group, then
     bulk-adds every provisioned colleague to the right group. Rows without a
     Yammer ID aren't in Entra yet and are skipped &ndash; invite them
@@ -19,10 +19,10 @@
     <label class="dropzone" id="dropzone">
       <span class="dz-icon">&#128196;</span>
       <span>Drag &amp; drop the report here, or <b>browse</b> for a file</span>
-      <div class="muted" style="margin-top:6px; font-size:13px;">.csv &middot; .tsv &middot; .xlsx</div>
+      <div class="muted" style="margin-top:6px; font-size:13px;">.csv &middot; .tsv &middot; .xls &middot; .xlsx</div>
       <div class="dz-filename" id="dz-filename"></div>
       <input type="file" name="report" id="report-file"
-             accept=".csv,.tsv,.txt,.xlsx,.xlsm,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+             accept=".csv,.tsv,.txt,.xls,.xlsx,.xlsm,text/csv,text/tab-separated-values,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
     </label>
     <div class="actions" style="margin-top:16px;">
       <button type="submit" class="btn btn-primary" id="upload-btn" disabled>Parse &amp; preview</button>

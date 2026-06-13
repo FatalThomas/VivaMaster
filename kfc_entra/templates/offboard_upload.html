@@ -17,10 +17,10 @@
   <form method="post" action="{{ url_for('main.offboard_upload') }}"
         enctype="multipart/form-data" class="upload-form">
     <label class="upload-zone" id="upload-zone">
-      <input type="file" name="file" accept=".csv,.tsv,.xlsx,.xlsm" required hidden>
+      <input type="file" name="file" accept=".csv,.tsv,.xls,.xlsx,.xlsm" required hidden>
       <div class="upload-art">&#128196;</div>
       <div class="upload-prompt"><b>Drag &amp; drop</b> a file, or <span class="link">browse</span></div>
-      <div class="upload-hint muted">.csv &middot; .tsv &middot; .xlsx</div>
+      <div class="upload-hint muted">.csv &middot; .tsv &middot; .xls &middot; .xlsx</div>
       <div class="upload-filename muted"></div>
     </label>
 
