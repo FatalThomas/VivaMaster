@@ -74,6 +74,18 @@
             <small>(recoverable for 30 days from Entra &gt; Deleted users)</small>
       </span>
     </label>
+    <label class="checkbox">
+      <input type="checkbox" id="invite-missing">
+      <span>Also <b>invite</b> report users not in the tenant (Guest invitation, batched 20 at a time)
+            <small>(Microsoft mails them an invite by default; uncheck below to suppress)</small>
+      </span>
+    </label>
+    <label class="checkbox checkbox-nested" id="send-invite-mail-label">
+      <input type="checkbox" id="send-invitation-message" checked disabled>
+      <span>Send Microsoft's invitation email
+            <small>(off = invite the account silently; the user can still sign in)</small>
+      </span>
+    </label>
     <button type="button" class="btn btn-primary" id="apply-btn">Apply to Entra groups</button>
   </div>
 
@@ -232,6 +244,9 @@
   var removeMissing = document.getElementById("remove-missing");
   var deleteMissing = document.getElementById("delete-missing");
   var deleteMissingLabel = document.getElementById("delete-missing-label");
+  var inviteMissing = document.getElementById("invite-missing");
+  var sendInviteMail = document.getElementById("send-invitation-message");
+  var sendInviteMailLabel = document.getElementById("send-invite-mail-label");
   var panel = document.getElementById("apply-panel");
 
   // Delete is a sub-option of reconcile - locked until reconcile is ticked.
@@ -243,6 +258,15 @@
   }
   removeMissing.addEventListener("change", syncDeleteState);
   syncDeleteState();
+
+  // Send-invite-mail is a sub-option of invite-missing.
+  function syncInviteState() {
+    var on = inviteMissing.checked;
+    sendInviteMail.disabled = !on;
+    sendInviteMailLabel.classList.toggle("checkbox-disabled", !on);
+  }
+  inviteMissing.addEventListener("change", syncInviteState);
+  syncInviteState();
 
   applyBtn.addEventListener("click", function () {
     var mapped = Object.keys(assignments).length;
@@ -302,6 +326,8 @@
           include_unknown: includeUnknown.checked,
           remove_missing: reconcile,
           delete_missing: purge,
+          invite_missing: inviteMissing.checked,
+          send_invitation_message: sendInviteMail.checked,
           assignments: assignments,
         },
         panel: panel,

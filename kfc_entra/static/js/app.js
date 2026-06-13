@@ -617,14 +617,52 @@
         try {
           var ids = (data.jobs || []).map(function (j) { return j.id; });
           localStorage.setItem("kfc-active-jobs", JSON.stringify(ids));
+          localStorage.setItem("kfc-active-jobs-snapshot", JSON.stringify(data.jobs || []));
         } catch (e) {}
       })
       .catch(function () { /* silent - we'll retry on the next interval */ });
   }
 
+  function kfcDockOptimisticRender() {
+    // Show the dock immediately on page load from the last known good
+    // snapshot in localStorage, so a fresh page after navigation doesn't
+    // flash an empty dock for the ~4 s until the first poll lands.
+    try {
+      var raw = localStorage.getItem("kfc-active-jobs-snapshot");
+      if (!raw) return;
+      var jobs = JSON.parse(raw);
+      if (Array.isArray(jobs) && jobs.length) kfcRenderDock(jobs);
+    } catch (e) {}
+  }
+
+  function kfcHasActiveJobsLocal() {
+    try {
+      var raw = localStorage.getItem("kfc-active-jobs-snapshot");
+      if (!raw) return false;
+      var jobs = JSON.parse(raw);
+      return Array.isArray(jobs) && jobs.length > 0;
+    } catch (e) { return false; }
+  }
+
+  // Surface a tiny toast when the user clicks a nav link while a job is
+  // active, so the transition "loses" the bulk panel without the user
+  // worrying that the apply stopped. The dock on the new page will pick
+  // up where it left off.
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest("a");
+    if (!a) return;
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (a.target === "_blank") return;
+    if (!a.href || a.href.indexOf(location.origin) !== 0) return;
+    if (a.pathname === location.pathname) return;
+    if (!kfcHasActiveJobsLocal()) return;
+    kfcToast("Apply continues in the dock (bottom-right). Track it from any page.", "info");
+  });
+
   // Don't poll the dock on the login / device-code pages - no point and
   // /jobs/active would just 302 to login anyway.
   if (document.body && document.body.dataset && document.body.dataset.dockOff !== "1") {
+    kfcDockOptimisticRender();  // instant render from cached snapshot
     kfcRefreshDock();
     setInterval(kfcRefreshDock, KFC_DOCK_POLL_MS);
   }

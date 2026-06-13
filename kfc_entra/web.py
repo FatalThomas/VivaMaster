@@ -811,6 +811,8 @@ def report_apply_stream():
     include_unknown = bool(payload.get("include_unknown"))
     remove_missing = bool(payload.get("remove_missing"))
     delete_missing = bool(payload.get("delete_missing"))
+    invite_missing = bool(payload.get("invite_missing"))
+    send_invitation_message = bool(payload.get("send_invitation_message", True))
     # Safety belt: delete is only meaningful as a sub-option of remove.
     if delete_missing and not remove_missing:
         delete_missing = False
@@ -821,6 +823,8 @@ def report_apply_stream():
     started_from = request.referrer or url_for(
         "main.report_preview", upload_id=upload_id
     )
+    cfg = current_app.config["KFC_CONFIG"]
+    invite_redirect_url = cfg.invite_redirect_url
 
     def factory(job):
         def gen():
@@ -831,6 +835,9 @@ def report_apply_stream():
                 remove_missing=remove_missing,
                 delete_missing=delete_missing,
                 email_lookup=cached_lookup,
+                invite_missing=invite_missing,
+                invite_redirect_url=invite_redirect_url,
+                send_invitation_message=send_invitation_message,
             ):
                 if job.cancel_requested:
                     return
@@ -999,6 +1006,8 @@ def report_apply_stores_stream():
     remove_missing = bool(payload.get("remove_missing"))
     delete_missing = bool(payload.get("delete_missing"))
     promote_community_admins = bool(payload.get("promote_community_admins"))
+    invite_missing = bool(payload.get("invite_missing"))
+    send_invitation_message = bool(payload.get("send_invitation_message", True))
     if delete_missing and not remove_missing:
         delete_missing = False
 
@@ -1020,6 +1029,8 @@ def report_apply_stores_stream():
     started_from = request.referrer or url_for(
         "main.report_preview_stores", upload_id=upload_id
     )
+    cfg = current_app.config["KFC_CONFIG"]
+    invite_redirect_url = cfg.invite_redirect_url
 
     def factory(job):
         def gen():
@@ -1032,6 +1043,9 @@ def report_apply_stores_stream():
                 grouping="store",
                 promote_community_admins=promote_community_admins,
                 email_lookup=cached_lookup,
+                invite_missing=invite_missing,
+                invite_redirect_url=invite_redirect_url,
+                send_invitation_message=send_invitation_message,
             ):
                 if job.cancel_requested:
                     return

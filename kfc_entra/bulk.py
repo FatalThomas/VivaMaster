@@ -114,6 +114,9 @@ def iter_apply_mappings(
     grouping: str = "franchisee",
     promote_community_admins: bool = False,
     email_lookup: dict[str, str | None] | None = None,
+    invite_missing: bool = False,
+    invite_redirect_url: str = "https://myapps.microsoft.com",
+    send_invitation_message: bool = True,
 ) -> Iterator[dict]:
     """Add (and optionally remove + delete) report rows from per-bucket groups.
 
@@ -267,6 +270,57 @@ def iter_apply_mappings(
                     "message": f"Resolved {done} of {len(pending_emails)} emails...",
                 }
 
+    # --- if invite_missing: any email still unresolved gets a Guest
+    # invitation via /invitations $batch (20 per round-trip). Successful
+    # invites land their new user_id in email_cache, so the row flows
+    # straight into the add phase like an already-provisioned colleague.
+    invite_failures: dict[str, str] = {}
+    if invite_missing:
+        # Build unique (email, display_name) pairs for rows whose email
+        # didn't resolve. First name wins per email so we don't overwrite
+        # a populated display_name with a blank one from a later row.
+        invite_payload: dict[str, str] = {}
+        for row in work:
+            e = (row.email or "").strip()
+            if not e or email_cache.get(e):
+                continue
+            invite_payload.setdefault(e, row.name or e.split("@", 1)[0])
+        if invite_payload:
+            invite_items = list(invite_payload.items())
+            yield {
+                "type": "phase",
+                "message": (
+                    f"Inviting {len(invite_items)} user(s) as Guests "
+                    "(batched 20 at a time)..."
+                ),
+            }
+            for i in range(0, len(invite_items), BATCH_SIZE):
+                chunk = invite_items[i : i + BATCH_SIZE]
+                invitations = [
+                    {
+                        "email": email,
+                        "display_name": display,
+                        "redirect_url": invite_redirect_url,
+                        "send_invitation_message": send_invitation_message,
+                    }
+                    for email, display in chunk
+                ]
+                try:
+                    results = client.batch_invite_guests(invitations)
+                except GraphError as exc:
+                    results = {email: (None, exc.message) for email, _ in chunk}
+                for email, (uid, err) in results.items():
+                    if uid:
+                        email_cache[email] = uid
+                    else:
+                        invite_failures[email] = err or "invite failed"
+                done = min(i + BATCH_SIZE, len(invite_items))
+                if done % 200 == 0 or done == len(invite_items):
+                    yield {
+                        "type": "phase",
+                        "message": f"Invited {done} of {len(invite_items)} so far...",
+                    }
+
     for row in work:
         code = _row_code(row)
         label = row.email or row.name or f"row {row.row_number}"
@@ -374,11 +428,17 @@ def iter_apply_mappings(
         emitted += 1
         stats = bucket(s["code"])
         stats["skipped"] += 1
+        email = (s.get("label") or "").strip().lower()
+        invite_err = invite_failures.get(email) if invite_missing else None
+        reason = (
+            f"Invite failed: {invite_err}" if invite_err
+            else "Not in Entra yet (no match by email)"
+        )
         yield {
             "type": "progress", "current": emitted, "total": total,
             "franchisee": s["code"], "user": s["label"],
             "status": "skipped",
-            "reason": "Not in Entra yet (no Yammer ID and no match by email)",
+            "reason": reason,
         }
 
     # --- batch-add: 20 per Graph round-trip via $batch.

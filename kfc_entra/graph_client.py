@@ -279,6 +279,70 @@ class GraphClient:
             results.setdefault(email, None)
         return results
 
+    def batch_invite_guests(
+        self,
+        invitations: list[dict],
+    ) -> dict[str, tuple[str | None, str]]:
+        """Send up to 20 Guest invitations in one Graph $batch round-trip.
+
+        ``invitations`` is a list of dicts with keys:
+
+          * ``email``                - the external email address to invite
+          * ``display_name``         - the Entra display name to assign
+          * ``redirect_url``         - where to land the user after consent
+          * ``send_invitation_message`` - whether Microsoft mails the user
+
+        Returns ``{email: (user_id_or_None, error_msg)}``. On success the
+        user_id is set and error_msg is "" (or "already_member" if the
+        Graph response indicates the address already exists as a Member).
+        On failure user_id is None and error_msg carries Graph's reason
+        so the caller can surface it.
+        """
+        if not invitations:
+            return {}
+        if len(invitations) > 20:
+            raise ValueError("Microsoft Graph $batch is limited to 20 requests.")
+
+        requests_body = []
+        for idx, inv in enumerate(invitations):
+            requests_body.append({
+                "id": str(idx),
+                "method": "POST",
+                "url": "/invitations",
+                "headers": {"Content-Type": "application/json"},
+                "body": {
+                    "invitedUserEmailAddress": inv["email"],
+                    "invitedUserDisplayName": inv.get("display_name") or inv["email"],
+                    "inviteRedirectUrl": inv.get("redirect_url")
+                        or "https://myapps.microsoft.com",
+                    "sendInvitationMessage": bool(inv.get("send_invitation_message", True)),
+                },
+            })
+
+        resp = self._request("POST", "/$batch", json={"requests": requests_body})
+        results: dict[str, tuple[str | None, str]] = {}
+        for entry in resp.json().get("responses") or []:
+            try:
+                idx = int(entry.get("id", -1))
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= idx < len(invitations):
+                continue
+            email = invitations[idx]["email"]
+            status = entry.get("status", 500)
+            body = entry.get("body") or {}
+            if 200 <= status < 300:
+                invited_user = (body or {}).get("invitedUser") or {}
+                uid = invited_user.get("id")
+                results[email] = (uid, "")
+            else:
+                error = body.get("error") if isinstance(body, dict) else None
+                msg = error.get("message") if isinstance(error, dict) else str(body)
+                results[email] = (None, msg or f"HTTP {status}")
+        for inv in invitations:
+            results.setdefault(inv["email"], (None, "No batch response."))
+        return results
+
     # ---------- groups ----------
     def list_groups(self, search: str | None = None) -> list[GraphGroup]:
         # Listing /groups with $orderby (and optionally $filter) is an
