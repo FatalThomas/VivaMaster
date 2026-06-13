@@ -104,6 +104,17 @@ def is_allowed_job_role(role: str) -> bool:
     return _norm_role(role) in JOB_ROLE_ALLOWLIST
 
 
+def _lookup_store_name(store_id: str) -> str:
+    """Resolve a numeric STOREID to its human-readable store name.
+
+    Wrapped so the import-time cost of loading store_directory's 862-entry
+    dict is only paid by reports that actually parse - tests / tools that
+    just import EmployeeRow don't.
+    """
+    from .store_directory import lookup_store_name
+    return lookup_store_name(store_id)
+
+
 class ReportParseError(Exception):
     """Raised when an uploaded file cannot be understood as an employee report."""
 
@@ -354,6 +365,17 @@ def _rows_from_table(table: list[list[str]]) -> tuple[list[EmployeeRow], RowFilt
         combined = f"{first} {last}".strip() if (first or last) else ""
         display_name = combined or values.get("name", "")
 
+        # ---- resolve STOREID -> store name ----
+        # The new payroll export only has STOREID (numeric), not STORE.
+        # Apply-by-Store still wants "KFC <name>" group names, so look the
+        # id up in the baked-in directory. Falls back to whatever the row
+        # already had (legacy reports), and ultimately to "" so the
+        # Apply-by-Store flow can flag it as UNKNOWN.
+        store_name = values.get("store", "").strip()
+        store_id = values.get("store_id", "").strip()
+        if not store_name and store_id:
+            store_name = _lookup_store_name(store_id)
+
         row = EmployeeRow(
             franchisee=values.get("franchisee", "").upper(),
             market=values.get("market", ""),
@@ -362,8 +384,8 @@ def _rows_from_table(table: list[list[str]]) -> tuple[list[EmployeeRow], RowFilt
             email=values.get("email", "").lower(),
             yammer_id=values.get("yammer_id", ""),
             yammer_status=values.get("yammer_status", ""),
-            store=values.get("store", ""),
-            store_id=values.get("store_id", ""),
+            store=store_name,
+            store_id=store_id,
             row_number=i,
         )
         if not row.email and not row.yammer_id and not row.name:
