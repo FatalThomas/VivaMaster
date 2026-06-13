@@ -8,7 +8,7 @@
 <link rel="alternate icon" href="{{ url_for('static', filename='img/app.ico') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
-<body>
+<body data-dock-off="{% if not current_user %}1{% endif %}">
 <header class="topbar">
   <div class="topbar-inner">
     <a class="brand" href="{{ url_for('main.landing') }}">

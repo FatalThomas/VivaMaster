@@ -166,6 +166,56 @@ a:hover { text-decoration: underline; }
 
 .actions { display: flex; gap: 12px; margin-top: 4px; }
 
+/* ---------- active-actions dock ---------- */
+#kfc-dock {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 9000;
+  width: 320px;
+  max-height: 60vh;
+  overflow: auto;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+}
+.kfc-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: 12px 12px 0 0;
+  font-weight: 600;
+}
+.kfc-dock-count { color: var(--muted); font-weight: 400; }
+.kfc-dock-body { padding: 6px 0; }
+.kfc-dock-job { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.kfc-dock-job:last-child { border-bottom: none; }
+.kfc-dock-label { font-weight: 500; margin-bottom: 6px; }
+.kfc-dock-progress {
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.kfc-dock-fill {
+  height: 100%;
+  background: var(--kfc-red);
+  transition: width 0.25s;
+}
+.kfc-dock-meta { color: var(--muted); margin-bottom: 8px; }
+.kfc-dock-actions { display: flex; gap: 6px; }
+.bulk-reconnect-hint {
+  color: var(--warn);
+  font-size: 12px;
+  font-style: italic;
+}
+
 .setup-steps {
   border: 1px solid var(--line);
   border-radius: 10px;

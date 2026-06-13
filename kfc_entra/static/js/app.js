@@ -294,11 +294,56 @@
       if (cfg.onDone) cfg.onDone(summary);
     }
 
-    return kfcStream(
-      cfg.url,
-      { method: cfg.method, body: cfg.body, signal: controller && controller.signal },
-      onEvent
-    ).catch(function (err) {
+    // POST to start the job, then subscribe to its server-side event stream
+    // with auto-reconnect. WiFi cutting out mid-apply no longer kills the
+    // run - the worker thread on the server keeps adding events to the
+    // job buffer and we replay everything we missed when we reconnect.
+    var subscription = null;
+    var jobId = null;
+
+    cancelBtn.addEventListener("click", function () {
+      // Override the default cancel-via-AbortController so we tell the
+      // server thread to stop, not just the local stream socket.
+      if (!jobId) return;
+      fetch("/jobs/" + jobId + "/cancel", {
+        method: "POST", credentials: "same-origin",
+      }).catch(function () { /* server already gone? fine */ });
+    });
+
+    return fetch(cfg.url, {
+      method: cfg.method,
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(cfg.body || {}),
+    }).then(function (resp) {
+      if (!resp.ok) {
+        return resp.json().then(function (j) {
+          throw new Error(j.error || ("Start failed (HTTP " + resp.status + ")"));
+        });
+      }
+      return resp.json();
+    }).then(function (info) {
+      jobId = info.job_id;
+      kfcTrackJob(jobId, cfg.verb);
+      subscription = kfcSubscribeJob(info.stream_url, onEvent, {
+        onClose: function (reason) {
+          // Stream ended cleanly (server said stream_end) - nothing to do,
+          // onEvent already handled the "done" event.
+        },
+        onReconnect: function (info) {
+          // Show a transient "reconnecting" hint without clobbering the
+          // running phase / progress text.
+          var hint = document.createElement("span");
+          hint.className = "bulk-reconnect-hint";
+          hint.textContent = " (network blip - resuming...)";
+          var head = panel.querySelector(".bulk-head");
+          if (head && !head.querySelector(".bulk-reconnect-hint")) {
+            head.appendChild(hint);
+            setTimeout(function () { hint.remove(); }, 4000);
+          }
+        },
+      });
+    }).catch(function (err) {
       if (cancelled || (err && err.name === "AbortError")) {
         renderCancelled();
         return;
@@ -385,6 +430,205 @@
     }
   });
 
+  /* ---------- resumable job subscription ----------
+     Opens an SSE stream to /jobs/<id>/stream?since=<offset>, tracks the
+     last offset seen via SSE id: lines, and on network error / clean
+     close reconnects with that offset so missed events get replayed.
+     Stops when a stream_end event arrives or the caller calls .stop(). */
+  function kfcSubscribeJob(streamUrl, onEvent, opts) {
+    opts = opts || {};
+    var since = 0;
+    var stopped = false;
+    var ctrl = null;
+    var retries = 0;
+    var verb = opts.verb || "";
+
+    function connect() {
+      ctrl = ("AbortController" in window) ? new AbortController() : null;
+      var url = streamUrl + (streamUrl.indexOf("?") >= 0 ? "&" : "?") + "since=" + since;
+      var fetchOpts = {
+        method: "GET",
+        headers: { "Accept": "text/event-stream" },
+        credentials: "same-origin",
+      };
+      if (ctrl) fetchOpts.signal = ctrl.signal;
+
+      fetch(url, fetchOpts).then(function (resp) {
+        if (!resp.ok || !resp.body) {
+          throw new Error("Stream failed (HTTP " + resp.status + ")");
+        }
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = "";
+        var pendingId = null;
+
+        function pump() {
+          return reader.read().then(function (chunk) {
+            if (chunk.done) return;
+            buffer += decoder.decode(chunk.value, { stream: true });
+            var parts = buffer.split("\n\n");
+            buffer = parts.pop();
+            parts.forEach(function (part) {
+              var dataLine = null;
+              part.split("\n").forEach(function (line) {
+                if (line.indexOf("id: ") === 0) {
+                  pendingId = parseInt(line.slice(4), 10);
+                } else if (line.indexOf("data: ") === 0) {
+                  dataLine = line.slice(6);
+                }
+              });
+              if (dataLine != null) {
+                try {
+                  var ev = JSON.parse(dataLine);
+                  if (pendingId != null) {
+                    since = Math.max(since, pendingId + 1);
+                    pendingId = null;
+                  }
+                  if (ev.type === "stream_end") {
+                    stopped = true;
+                    if (opts.onClose) opts.onClose(ev);
+                    return;
+                  }
+                  onEvent(ev);
+                } catch (e) { /* malformed JSON - skip */ }
+              }
+            });
+            if (stopped) return;
+            return pump();
+          });
+        }
+        retries = 0;  // any successful read resets the backoff
+        return pump();
+      }).then(function () {
+        // Clean end-of-body without seeing stream_end - server may have
+        // crashed mid-stream. Treat as a reconnect.
+        if (!stopped) scheduleReconnect();
+      }).catch(function (err) {
+        if (stopped) return;
+        scheduleReconnect();
+      });
+    }
+
+    function scheduleReconnect() {
+      retries += 1;
+      if (retries > 30) {
+        // ~5 min of solid failures - give up and surface an error.
+        stopped = true;
+        onEvent({ type: "error", message: "Lost connection to the server. Refresh the page to retry." });
+        return;
+      }
+      // Cap backoff at 8 s so a long outage doesn't snowball.
+      var delay = Math.min(8000, 1000 * Math.pow(1.7, Math.min(retries, 6)));
+      if (opts.onReconnect) opts.onReconnect({ retries: retries, delay: delay });
+      setTimeout(function () {
+        if (!stopped) connect();
+      }, delay);
+    }
+
+    connect();
+
+    return {
+      stop: function () {
+        stopped = true;
+        if (ctrl) try { ctrl.abort(); } catch (e) {}
+      },
+    };
+  }
+
+  /* ---------- active-actions dock ----------
+     Floating panel showing currently-running server jobs so the user can
+     navigate to other pages while a 50k-row apply is running. Polls
+     /jobs/active every 4 s; clicking "Open" navigates back to the page
+     that launched the job (so the original .bulk-panel resumes). */
+  var KFC_DOCK_POLL_MS = 4000;
+
+  function kfcTrackJob(jobId, verb) {
+    // Cache job_id + verb in localStorage so the dock can render an
+    // expected entry even before the next poll arrives (avoids a flash
+    // of "no active jobs" on the page that started the work).
+    try {
+      var key = "kfc-active-jobs";
+      var current = JSON.parse(localStorage.getItem(key) || "[]");
+      if (current.indexOf(jobId) < 0) current.push(jobId);
+      localStorage.setItem(key, JSON.stringify(current));
+      kfcRefreshDock();  // immediate
+    } catch (e) {}
+  }
+
+  function kfcDockEl() {
+    var el = document.getElementById("kfc-dock");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "kfc-dock";
+    el.hidden = true;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  function kfcRenderDock(jobs) {
+    var el = kfcDockEl();
+    if (!jobs || !jobs.length) {
+      el.hidden = true;
+      el.innerHTML = "";
+      return;
+    }
+    el.hidden = false;
+    var html = '<div class="kfc-dock-head">' +
+      '<span class="spinner spinner-sm"></span>' +
+      ' Active actions <span class="kfc-dock-count">(' + jobs.length + ')</span>' +
+      '</div><div class="kfc-dock-body">';
+    jobs.forEach(function (j) {
+      var label = (j.label || "Running").replace(/</g, "&lt;");
+      var pct = j.percent || 0;
+      var onCurrent = j.started_from && location.pathname === new URL(j.started_from, location.origin).pathname;
+      html +=
+        '<div class="kfc-dock-job" data-job="' + j.id + '">' +
+          '<div class="kfc-dock-label">' + label + '</div>' +
+          '<div class="kfc-dock-progress"><div class="kfc-dock-fill" style="width:' + pct + '%"></div></div>' +
+          '<div class="kfc-dock-meta">' +
+            (j.total ? (j.current + " of " + j.total + " (" + pct + "%)") : "Starting...") +
+          '</div>' +
+          '<div class="kfc-dock-actions">' +
+            (onCurrent ? "" :
+              '<a class="btn btn-tiny btn-secondary" href="' + (j.started_from || "/") + '">Open page</a>') +
+            ' <button type="button" class="btn btn-tiny" data-cancel="' + j.id + '">Cancel</button>' +
+          '</div>' +
+        '</div>';
+    });
+    html += "</div>";
+    el.innerHTML = html;
+    el.querySelectorAll("[data-cancel]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var jid = b.dataset.cancel;
+        if (!confirm("Cancel this action? Items already finished are not rolled back.")) return;
+        fetch("/jobs/" + jid + "/cancel", { method: "POST", credentials: "same-origin" });
+        b.disabled = true;
+        b.textContent = "Cancelling...";
+      });
+    });
+  }
+
+  function kfcRefreshDock() {
+    fetch("/jobs/active", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : { jobs: [] }; })
+      .then(function (data) {
+        kfcRenderDock(data.jobs || []);
+        // Sync localStorage to the server's truth
+        try {
+          var ids = (data.jobs || []).map(function (j) { return j.id; });
+          localStorage.setItem("kfc-active-jobs", JSON.stringify(ids));
+        } catch (e) {}
+      })
+      .catch(function () { /* silent - we'll retry on the next interval */ });
+  }
+
+  // Don't poll the dock on the login / device-code pages - no point and
+  // /jobs/active would just 302 to login anyway.
+  if (document.body && document.body.dataset && document.body.dataset.dockOff !== "1") {
+    kfcRefreshDock();
+    setInterval(kfcRefreshDock, KFC_DOCK_POLL_MS);
+  }
+
   window.kfcToast = kfcToast;
   window.kfcConfirm = kfcConfirm;
   window.kfcStream = kfcStream;
@@ -392,4 +636,7 @@
   window.kfcBusy = kfcBusy;
   window.kfcDownloadCsv = kfcDownloadCsv;
   window.kfcLoadingBanner = kfcLoadingBanner;
+  window.kfcSubscribeJob = kfcSubscribeJob;
+  window.kfcTrackJob = kfcTrackJob;
+  window.kfcRefreshDock = kfcRefreshDock;
 })();

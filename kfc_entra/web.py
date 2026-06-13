@@ -43,6 +43,7 @@ from .bulk import (
 )
 from .graph_client import GraphClient, GraphError
 from . import cloud_mappings
+from . import jobs as job_registry
 from .mappings import (
     delete_mapping,
     delete_store_mapping,
@@ -268,8 +269,84 @@ def _sse_response(events) -> Response:
         },
     )
 
+
+def _job_stream_response(job, since: int = 0) -> Response:
+    """Stream a Job's events as SSE with id: offsets for client reconnect.
+
+    Each event line includes ``id: <offset>`` so the browser's reconnect
+    loop can resume from the right place via ``?since=<offset>``. Idle
+    timeouts yield a heartbeat comment instead of a data event so the
+    client's event parser never sees them.
+    """
+
+    def generate():
+        for offset, ev in job.iter_events(since=since):
+            if ev is None:
+                yield ": heartbeat\n\n"
+                continue
+            yield f"id: {offset}\ndata: {json.dumps(ev)}\n\n"
+        # Final marker so the client knows this is a clean end-of-stream
+        # rather than a network drop it should retry from.
+        yield f"data: {json.dumps({'type': 'stream_end', 'state': job.state})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
 auth_bp = Blueprint("auth", __name__)
 main_bp = Blueprint("main", __name__)
+
+
+# ---------- background-job streaming + control --------------------------------
+@main_bp.route("/jobs/<job_id>/stream")
+@login_required
+def job_stream(job_id: str):
+    """SSE stream of a job's events from ?since=<offset>. Client reconnects
+    here with the offset of the last event they saw - any events appended
+    while they were disconnected get replayed immediately."""
+    try:
+        since = max(0, int(request.args.get("since") or 0))
+    except (TypeError, ValueError):
+        since = 0
+    job = job_registry.get(job_id)
+    if not job:
+        return _sse_response(
+            [{"type": "error",
+              "message": "Job not found (it may have finished and been pruned)."}]
+        )
+    return _job_stream_response(job, since=since)
+
+
+@main_bp.route("/jobs/active")
+@login_required
+def jobs_active():
+    """List running jobs - used by the floating actions dock on every page."""
+    return jsonify(jobs=job_registry.list_active())
+
+
+@main_bp.route("/jobs/<job_id>", methods=["GET"])
+@login_required
+def job_snapshot(job_id: str):
+    job = job_registry.get(job_id)
+    if not job:
+        return jsonify(error="Job not found"), 404
+    return jsonify(job=job.snapshot())
+
+
+@main_bp.route("/jobs/<job_id>/cancel", methods=["POST"])
+@login_required
+def job_cancel(job_id: str):
+    job = job_registry.get(job_id)
+    if not job:
+        return jsonify(error="Job not found"), 404
+    job.request_cancel()
+    return jsonify(ok=True)
 
 
 # ---------- auth routes ----------
@@ -673,15 +750,20 @@ def report_upload():
 @main_bp.route("/report/apply/stream", methods=["POST"])
 @login_required
 def report_apply_stream():
-    """SSE stream that applies Franchisee -> Group assignments to a parsed upload."""
+    """Kick off a Franchisee-mode apply job and return its job_id.
+
+    The work runs on a background thread (kfc_entra.jobs) so the client
+    can disconnect, reconnect, and pick up where it left off. The
+    response is JSON; the client then opens an SSE stream at
+    /jobs/<id>/stream?since=0 to follow progress.
+    """
     payload = request.get_json(silent=True) or {}
     upload_id = payload.get("upload_id") or ""
     rows = _load_upload(upload_id)
     if rows is None:
-        return _sse_response(
-            [{"type": "error",
-              "message": "Upload expired or not found - please re-upload the report."}]
-        )
+        return jsonify(
+            error="Upload expired or not found - please re-upload the report.",
+        ), 404
     assignments = payload.get("assignments") or {}
     if not isinstance(assignments, dict):
         assignments = {}
@@ -694,21 +776,31 @@ def report_apply_stream():
     client = GraphClient(get_access_token())
     cached_lookup = _load_lookup(upload_id) or None
 
-    def stream():
-        yield from iter_apply_mappings(
-            client, rows,
-            assignments=assignments,
-            include_unknown=include_unknown,
-            remove_missing=remove_missing,
-            delete_missing=delete_missing,
-            email_lookup=cached_lookup,
-        )
-        # iter_apply_mappings calls save_mapping() as Franchisee groups get
-        # resolved or created. Push the now-updated local file to the cloud
-        # so the next device sees them.
-        _cloud_push_silent(client)
+    label = f"Apply by Franchisee ({len(assignments)} group(s))"
+    started_from = request.referrer or url_for(
+        "main.report_preview", upload_id=upload_id
+    )
 
-    return _sse_response(stream())
+    def factory(job):
+        def gen():
+            for ev in iter_apply_mappings(
+                client, rows,
+                assignments=assignments,
+                include_unknown=include_unknown,
+                remove_missing=remove_missing,
+                delete_missing=delete_missing,
+                email_lookup=cached_lookup,
+            ):
+                if job.cancel_requested:
+                    return
+                yield ev
+            _cloud_push_silent(client)
+        return gen()
+
+    job = job_registry.start("apply_franchisee", label, started_from, factory)
+    return jsonify(job_id=job.id, stream_url=url_for(
+        "main.job_stream", job_id=job.id
+    ))
 
 
 @main_bp.route("/report/preview/<upload_id>/lookup")
@@ -848,15 +940,16 @@ def report_preview_stores(upload_id: str):
 @main_bp.route("/report/apply-stores/stream", methods=["POST"])
 @login_required
 def report_apply_stores_stream():
-    """SSE stream that applies Store -> Group assignments to a parsed upload."""
+    """Kick off a Store-mode apply job. Same job-manager pattern as
+    /report/apply/stream - returns JSON {job_id, stream_url} for the
+    client to subscribe to."""
     payload = request.get_json(silent=True) or {}
     upload_id = payload.get("upload_id") or ""
     rows = _load_upload(upload_id)
     if rows is None:
-        return _sse_response(
-            [{"type": "error",
-              "message": "Upload expired or not found - please re-upload the report."}]
-        )
+        return jsonify(
+            error="Upload expired or not found - please re-upload the report.",
+        ), 404
     assignments = payload.get("assignments") or {}
     if not isinstance(assignments, dict):
         assignments = {}
@@ -880,18 +973,33 @@ def report_apply_stores_stream():
     if saved_any:
         _cloud_push_silent(client)
     cached_lookup = _load_lookup(upload_id) or None
-    return _sse_response(
-        iter_apply_mappings(
-            client, rows,
-            assignments=assignments,
-            include_unknown=include_unknown,
-            remove_missing=remove_missing,
-            delete_missing=delete_missing,
-            grouping="store",
-            promote_community_admins=promote_community_admins,
-            email_lookup=cached_lookup,
-        )
+
+    label = f"Apply by Store ({len(assignments)} group(s))"
+    started_from = request.referrer or url_for(
+        "main.report_preview_stores", upload_id=upload_id
     )
+
+    def factory(job):
+        def gen():
+            for ev in iter_apply_mappings(
+                client, rows,
+                assignments=assignments,
+                include_unknown=include_unknown,
+                remove_missing=remove_missing,
+                delete_missing=delete_missing,
+                grouping="store",
+                promote_community_admins=promote_community_admins,
+                email_lookup=cached_lookup,
+            ):
+                if job.cancel_requested:
+                    return
+                yield ev
+        return gen()
+
+    job = job_registry.start("apply_stores", label, started_from, factory)
+    return jsonify(job_id=job.id, stream_url=url_for(
+        "main.job_stream", job_id=job.id
+    ))
 
 
 # ============================================================================
