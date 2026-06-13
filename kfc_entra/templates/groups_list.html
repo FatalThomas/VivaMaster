@@ -26,13 +26,13 @@
        href="{{ url_for('main.groups_list', type='other', admin=admin_filter) }}">Other ({{ counts.other }})</a>
   </div>
 
-  <div class="chips chips-secondary">
+  <div class="chips chips-secondary" data-admin-loaded="{{ '1' if admin_data_loaded else '0' }}">
     <a class="chip {{ 'chip-active' if admin_filter == 'any' else '' }}"
        href="{{ url_for('main.groups_list', type=type_filter) }}">Any</a>
-    <a class="chip {{ 'chip-active' if admin_filter == 'has' else '' }}"
+    <a class="chip admin-chip {{ 'chip-active' if admin_filter == 'has' else '' }}"
        href="{{ url_for('main.groups_list', type=type_filter, admin='has') }}"
        title="{{ 'Already cached - instant.' if admin_data_loaded else 'Bulk-fetches owner counts the first time (~few seconds).' }}">Has admins</a>
-    <a class="chip {{ 'chip-active' if admin_filter == 'none' else '' }}"
+    <a class="chip admin-chip {{ 'chip-active' if admin_filter == 'none' else '' }}"
        href="{{ url_for('main.groups_list', type=type_filter, admin='none') }}"
        title="{{ 'Already cached - instant.' if admin_data_loaded else 'Bulk-fetches owner counts the first time (~few seconds).' }}">No admins</a>
   </div>
@@ -144,15 +144,30 @@
         return '<em class="muted">' + (kind === "owner" ? "No community admins." : "No member-only users.") + "</em>";
       }
       return '<div class="chip-list">' + list.map(function (u) {
-        var url = "/groups/" + encodeURIComponent(groupId) + "/" +
+        var label = esc(u.name || u.email || u.id);
+        var removeUrl = "/groups/" + encodeURIComponent(groupId) + "/" +
                   (kind === "owner" ? "owners" : "members") + "/" +
                   encodeURIComponent(u.id) + "/remove";
+        var promoteBtn = "";
+        if (kind === "member") {
+          var promoteUrl = "/groups/" + encodeURIComponent(groupId) + "/members/" +
+                           encodeURIComponent(u.id) + "/promote";
+          promoteBtn =
+            '<button type="button" class="user-group-promote" ' +
+            'data-url="' + promoteUrl + '" ' +
+            'data-user-id="' + esc(u.id) + '" ' +
+            'data-user-name="' + esc(u.name || "") + '" ' +
+            'data-user-email="' + esc(u.email || "") + '" ' +
+            'data-label="' + label + '" ' +
+            'title="Promote to community admin (group owner)">&#9819;</button>';
+        }
         return '<span class="user-group-chip" data-user-id="' + esc(u.id) +
                '" data-kind="' + kind + '">' +
                (kind === "owner" ? '<span class="crown" title="Community admin">&#9819;</span> ' : "") +
-               '<span class="user-group-name">' + esc(u.name || u.email || u.id) + '</span>' +
+               '<span class="user-group-name">' + label + '</span>' +
+               promoteBtn +
                '<button type="button" class="user-group-remove" ' +
-               'data-url="' + url + '" data-label="' + esc(u.name || u.email || u.id) + '" ' +
+               'data-url="' + removeUrl + '" data-label="' + label + '" ' +
                'data-kind-label="' + (kind === "owner" ? "owner / community admin" : "member") + '" ' +
                'title="' + (kind === "owner" ? "Demote from owner" : "Remove from group") + '">&times;</button>' +
                '</span>';
@@ -164,6 +179,43 @@
       userChips(owners, "owner") +
       '<h3 class="group-section-h">Members only (' + members.length + ')</h3>' +
       userChips(members, "member");
+
+    panel.querySelectorAll(".user-group-promote").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var chip = btn.closest(".user-group-chip");
+        var label = btn.dataset.label;
+        var ok = confirm("Promote " + label + " to community admin (group owner) of \"" + groupName + "\"?");
+        if (!ok) return;
+        btn.disabled = true;
+        chip.style.opacity = "0.5";
+        fetch(btn.dataset.url, { method: "POST", credentials: "same-origin" })
+          .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+          .then(function (res) {
+            if (!res.ok) throw new Error(res.data.error || "Failed.");
+            kfcToast(label + " promoted to community admin of \"" + groupName + "\".", "success");
+            // Bust the cache for this group and re-render the panel
+            // from a fresh /details fetch so members + owners reflect
+            // the new state. Cheap (one Graph round-trip).
+            delete loaded[groupId];
+            panel.innerHTML = '<span class="spinner spinner-sm"></span> Refreshing&hellip;';
+            fetch("/groups/" + encodeURIComponent(groupId) + "/details", { credentials: "same-origin" })
+              .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+              .then(function (res2) {
+                if (!res2.ok) throw new Error(res2.data.error || "Reload failed.");
+                loaded[groupId] = true;
+                renderPanel(panel, groupId, groupName, res2.data);
+              })
+              .catch(function (err) {
+                panel.innerHTML = '<span class="muted">Couldn\'t reload: ' + esc(err.message) + '</span>';
+              });
+          })
+          .catch(function (err) {
+            btn.disabled = false;
+            chip.style.opacity = "1";
+            kfcToast(err.message, "error");
+          });
+      });
+    });
 
     panel.querySelectorAll(".user-group-remove").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -186,6 +238,23 @@
             chip.style.opacity = "1";
             kfcToast(err.message, "error");
           });
+      });
+    });
+  }
+
+  // First-click on "Has admins" / "No admins" triggers a bulk owner-count
+  // fetch on the server (one Graph $batch per ~20 groups). Show a top
+  // banner so the user knows why the click feels sluggish on a fresh
+  // session - cached runs are instant, so only kick the banner when the
+  // server says admin data isn't loaded yet.
+  var adminChips = document.querySelector(".chips-secondary");
+  var adminLoaded = adminChips && adminChips.dataset.adminLoaded === "1";
+  if (!adminLoaded) {
+    document.querySelectorAll(".admin-chip").forEach(function (a) {
+      a.addEventListener("click", function () {
+        if (typeof kfcLoadingBanner === "function") {
+          kfcLoadingBanner("Loading admin status for groups…", 12000);
+        }
       });
     });
   }

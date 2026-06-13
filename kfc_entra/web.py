@@ -1207,6 +1207,24 @@ def group_remove_owner(group_id: str, user_id: str):
     return jsonify({"status": outcome})
 
 
+@main_bp.route("/groups/<group_id>/members/<user_id>/promote", methods=["POST"])
+@login_required
+def group_promote_member(group_id: str, user_id: str):
+    """Promote an existing group member to owner (community admin).
+
+    Calls Graph POST /groups/{id}/owners/$ref. The user stays in the
+    members list too - Graph treats owners and members as separate
+    relationships. If the user is already an owner, the Graph 4xx is
+    mapped to status="already_owner" so the UI can no-op cleanly.
+    """
+    client = GraphClient(get_access_token())
+    try:
+        outcome = client.add_owner_to_group(group_id, user_id)
+    except GraphError as exc:
+        return jsonify({"error": exc.message}), 502
+    return jsonify({"status": outcome})
+
+
 # ---------- mappings management ----------
 def _cloud_push_silent(client: GraphClient | None = None) -> None:
     """Best-effort: push local mappings to the cloud after a save/delete.
