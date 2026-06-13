@@ -15,6 +15,28 @@
     existing groups so a "Salamander Bay" missing its KFC- prefix is easy to
     spot.
   </p>
+  {% if filter_stats and filter_stats.total_dropped %}
+    <div class="flash flash-success">
+      Filtered the upload &middot; kept <b>{{ filter_stats.kept }}</b> of
+      <b>{{ filter_stats.total_raw }}</b> rows.
+      Dropped:
+      {% if filter_stats.has_status_column %}
+        <span class="muted">{{ filter_stats.dropped_status }} non-Active</span>
+      {% endif %}
+      {% if filter_stats.has_brand_column %}
+        &middot; <span class="muted">{{ filter_stats.dropped_brand }} non-KFC brand</span>
+      {% endif %}
+      {% if filter_stats.has_country_column %}
+        &middot; <span class="muted">{{ filter_stats.dropped_country }} non-Australia</span>
+      {% endif %}
+      {% if filter_stats.has_job_role_column %}
+        &middot; <span class="muted">{{ filter_stats.dropped_job_role }} off-allowlist job role</span>
+      {% endif %}
+      {% if filter_stats.dropped_blank %}
+        &middot; <span class="muted">{{ filter_stats.dropped_blank }} blank</span>
+      {% endif %}.
+    </div>
+  {% endif %}
 
   {% if groups_error %}
     <div class="flash flash-warning">

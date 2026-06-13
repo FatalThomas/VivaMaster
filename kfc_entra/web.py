@@ -167,21 +167,61 @@ def _trim_uploads_dir() -> None:
         pass
 
 
-def _stash_upload(rows: list[EmployeeRow]) -> str:
+# Per-upload filter stats so the preview can say "kept X of Y after
+# dropping Z by JOBROLE filter" - mirrors _UPLOAD_STORE semantics.
+_UPLOAD_STATS: OrderedDict[str, dict] = OrderedDict()
+
+
+def _stash_upload(rows: list[EmployeeRow], stats=None) -> str:
     token = uuid.uuid4().hex
     payload = [r.to_dict() for r in rows]
     _UPLOAD_STORE[token] = payload
     while len(_UPLOAD_STORE) > _UPLOAD_STORE_MAX:
         _UPLOAD_STORE.popitem(last=False)
+    stats_dict: dict = {}
+    if stats is not None:
+        # dataclasses.asdict would import dataclasses; cheap enough to
+        # spell out the fields and skip the dep.
+        stats_dict = {
+            "total_raw": stats.total_raw,
+            "kept": stats.kept,
+            "dropped_status": stats.dropped_status,
+            "dropped_brand": stats.dropped_brand,
+            "dropped_country": stats.dropped_country,
+            "dropped_job_role": stats.dropped_job_role,
+            "dropped_blank": stats.dropped_blank,
+            "has_status_column": stats.has_status_column,
+            "has_brand_column": stats.has_brand_column,
+            "has_country_column": stats.has_country_column,
+            "has_job_role_column": stats.has_job_role_column,
+            "total_dropped": stats.total_dropped,
+        }
+    _UPLOAD_STATS[token] = stats_dict
+    while len(_UPLOAD_STATS) > _UPLOAD_STORE_MAX:
+        _UPLOAD_STATS.popitem(last=False)
     # Persist to disk too - a 52k-row report takes ~30 MB of JSON which is
     # cheap, and surviving an app restart is worth a lot of UX.
     try:
         with open(_uploads_dir() / f"{token}.json", "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
+        with open(_uploads_dir() / f"{token}.stats.json", "w", encoding="utf-8") as fh:
+            json.dump(stats_dict, fh)
         _trim_uploads_dir()
     except OSError:
         pass  # disk full / permissions - in-memory copy still works
     return token
+
+
+def _load_upload_stats(token: str) -> dict:
+    if token in _UPLOAD_STATS:
+        return _UPLOAD_STATS[token]
+    try:
+        with open(_uploads_dir() / f"{token}.stats.json", encoding="utf-8") as fh:
+            data = json.load(fh)
+        _UPLOAD_STATS[token] = data
+        return data
+    except (OSError, ValueError):
+        return {}
 
 
 def _load_upload(token: str) -> list[EmployeeRow] | None:
@@ -715,12 +755,12 @@ def report_upload():
 
     data = file.read()
     try:
-        rows = parse_report(data, file.filename)
+        rows, stats = parse_report(data, file.filename)
     except ReportParseError as exc:
         flash(f"Could not parse '{file.filename}': {exc}", "error")
         return redirect(url_for("main.report_upload_page"))
 
-    upload_id = _stash_upload(rows)
+    upload_id = _stash_upload(rows, stats=stats)
     franchisees = group_by_franchisee(rows)
     saved = load_mappings()["mappings"]
 
@@ -741,6 +781,7 @@ def report_upload():
         upload_id=upload_id,
         franchisees=franchisees,
         total_rows=len(rows),
+        filter_stats=_load_upload_stats(upload_id),
         saved_mappings=saved,
         groups_json=groups_json,
         groups_error=groups_error,
@@ -932,6 +973,7 @@ def report_preview_stores(upload_id: str):
         stores=stores,
         store_info=store_info,
         total_rows=len(rows),
+        filter_stats=_load_upload_stats(upload_id),
         groups_json=groups_json,
         groups_error=groups_error,
     )

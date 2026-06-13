@@ -1,9 +1,18 @@
 """Employee report parsing (CSV / TSV / XLSX) and Franchisee grouping.
 
-The report is the standard "Employee Yammer Status" export. Headers vary in
-case and punctuation between exports, so we normalise them before matching.
-Rows with no Yammer ID (= no Entra object yet) are kept for the preview but
-flagged so the apply step can skip them.
+Supports two report shapes:
+
+  * Legacy "Employee Yammer Status" export with columns like FRANCHISEE,
+    EMAIL, YAMMER ID, STORE, etc.
+  * Current Yum! payroll export with USERID, FIRSTNAME, LASTNAME, EMAIL,
+    STATUS, PRIMARY_BRAND, COUNTRY, JOBROLE, FRANCHISEID, STOREID, ...
+
+Headers vary in case and punctuation between exports, so we normalise
+them before matching. When the new-format filter columns are present
+(STATUS, PRIMARY_BRAND, COUNTRY, JOBROLE), rows that don't match the
+KFC-Australia-active-allowlisted-role criteria get dropped at parse
+time and counted in the returned ``RowFilterStats`` so the preview can
+report how much was filtered out.
 """
 from __future__ import annotations
 
@@ -19,11 +28,19 @@ UNKNOWN_CODES = {"", "UNK", "UNKNOWN"}
 # normalised header -> EmployeeRow attribute
 _HEADER_MAP = {
     "franchisee": "franchisee",
+    "franchiseid": "franchisee",
+    "franchise id": "franchisee",
     "market": "market",
+    "bmu": "market",
     "name": "name",
     "employee name": "name",
+    "firstname": "first_name",
+    "first name": "first_name",
+    "lastname": "last_name",
+    "last name": "last_name",
     "job role": "job_role",
     "role": "job_role",
+    "jobrole": "job_role",
     "email": "email",
     "e mail": "email",
     "email address": "email",
@@ -35,13 +52,85 @@ _HEADER_MAP = {
     "store": "store",
     "storeid": "store_id",
     "store id": "store_id",
+    "status": "status",
+    "primary brand": "primary_brand",
+    "primarybrand": "primary_brand",
+    "country": "country",
 }
 
+# Only the franchisee bucket and an email are non-negotiable. STATUS /
+# PRIMARY_BRAND / COUNTRY / JOBROLE are only used when present.
 _REQUIRED_FIELDS = ("franchisee", "email")
+
+# Job-role allowlist (new-format reports). Compared case-insensitively
+# with whitespace normalised, so "Owner-RGM" / "owner-rgm" / "Owner-RGM "
+# all match. Rows whose JOBROLE is anything outside this set are dropped
+# before they ever reach the preview.
+JOB_ROLE_ALLOWLIST = frozenset(
+    {
+        "owner",
+        "franchise business coach",
+        "restaurant excellence leader",
+        "training coordinator",
+        "foh tm",
+        "key operator",
+        "operations (ar)",
+        "region coach",
+        "shift supervisor",
+        "boh tm",
+        "shift supervisor trainee",
+        "assistant manager",
+        "assistant manager trainee",
+        "area coach trainee",
+        "moh tm",
+        "rgm trainee",
+        "rgm",
+        "supported worker",
+        "delivery tm",
+        "team trainer",
+        "market coach",
+        "owner-rgm",
+        "rsc",
+    }
+)
+
+
+def _norm_role(role: str) -> str:
+    return " ".join((role or "").split()).lower()
+
+
+def is_allowed_job_role(role: str) -> bool:
+    """True when the role is on the active allowlist of accepted job roles."""
+    return _norm_role(role) in JOB_ROLE_ALLOWLIST
 
 
 class ReportParseError(Exception):
     """Raised when an uploaded file cannot be understood as an employee report."""
+
+
+@dataclass
+class RowFilterStats:
+    """How many rows came in, what survived, what got dropped and why."""
+    total_raw: int = 0
+    kept: int = 0
+    dropped_status: int = 0
+    dropped_brand: int = 0
+    dropped_country: int = 0
+    dropped_job_role: int = 0
+    dropped_blank: int = 0
+    # Which filter columns were actually present in the upload's headers,
+    # so the preview can say "STATUS filter applied" vs "no STATUS column".
+    has_status_column: bool = False
+    has_brand_column: bool = False
+    has_country_column: bool = False
+    has_job_role_column: bool = False
+
+    @property
+    def total_dropped(self) -> int:
+        return (
+            self.dropped_status + self.dropped_brand + self.dropped_country
+            + self.dropped_job_role + self.dropped_blank
+        )
 
 
 @dataclass
@@ -195,7 +284,7 @@ def _map_headers(headers: list[str]) -> dict[int, str]:
     return mapping
 
 
-def _rows_from_table(table: list[list[str]]) -> list[EmployeeRow]:
+def _rows_from_table(table: list[list[str]]) -> tuple[list[EmployeeRow], RowFilterStats]:
     if not table:
         raise ReportParseError("The file is empty.")
     headers = [str(c or "") for c in table[0]]
@@ -210,12 +299,20 @@ def _rows_from_table(table: list[list[str]]) -> list[EmployeeRow]:
             + ", ".join(h for h in headers if h.strip())[:300]
         )
 
+    stats = RowFilterStats(
+        has_status_column="status" in found,
+        has_brand_column="primary_brand" in found,
+        has_country_column="country" in found,
+        has_job_role_column="job_role" in found,
+    )
+
     rows: list[EmployeeRow] = []
     for i, raw in enumerate(table[1:], start=1):
         values = {attr: str(raw[idx] or "").strip() if idx < len(raw) else ""
                   for idx, attr in col_map.items()}
         if not any(values.values()):
             continue  # fully blank line
+        stats.total_raw += 1
         # Ragged rows (extra/missing cells) shift columns. Salvage the two
         # load-bearing fields by content: EMAIL must contain '@', Yammer ID
         # must be a UUID. Only override when the mapped value is wrong.
@@ -224,10 +321,43 @@ def _rows_from_table(table: list[list[str]]) -> list[EmployeeRow]:
             values["email"] = next((c for c in cells if "@" in c), values["email"])
         if values.get("yammer_id") and not _is_uuid(values["yammer_id"]):
             values["yammer_id"] = next((c for c in cells if _is_uuid(c)), "")
+
+        # ---- new-format filters (only apply when the column is present) ----
+        # STATUS must be exactly "Active" (case-insensitive).
+        if stats.has_status_column:
+            status_val = values.get("status", "").strip().lower()
+            if status_val and status_val != "active":
+                stats.dropped_status += 1
+                continue
+        if stats.has_brand_column:
+            brand_val = values.get("primary_brand", "").strip().lower()
+            if brand_val and brand_val != "kfc":
+                stats.dropped_brand += 1
+                continue
+        if stats.has_country_column:
+            country_val = values.get("country", "").strip().lower()
+            if country_val and country_val != "australia":
+                stats.dropped_country += 1
+                continue
+        if stats.has_job_role_column:
+            role_val = values.get("job_role", "")
+            if role_val and not is_allowed_job_role(role_val):
+                stats.dropped_job_role += 1
+                continue
+
+        # ---- compose the display name ----
+        # New format gives FIRSTNAME + LASTNAME separately. Build "First
+        # Last" for Entra. Falls back to the legacy single "name" column
+        # if FIRSTNAME wasn't present.
+        first = values.get("first_name", "").strip()
+        last = values.get("last_name", "").strip()
+        combined = f"{first} {last}".strip() if (first or last) else ""
+        display_name = combined or values.get("name", "")
+
         row = EmployeeRow(
             franchisee=values.get("franchisee", "").upper(),
             market=values.get("market", ""),
-            name=values.get("name", ""),
+            name=display_name,
             job_role=values.get("job_role", ""),
             email=values.get("email", "").lower(),
             yammer_id=values.get("yammer_id", ""),
@@ -237,11 +367,23 @@ def _rows_from_table(table: list[list[str]]) -> list[EmployeeRow]:
             row_number=i,
         )
         if not row.email and not row.yammer_id and not row.name:
+            stats.dropped_blank += 1
             continue  # nothing actionable on this line
         rows.append(row)
+    stats.kept = len(rows)
     if not rows:
-        raise ReportParseError("The file has headers but no data rows.")
-    return rows
+        # Distinguish "no data" from "everything was filtered out" for the
+        # error message - the latter is more useful when the user expects
+        # to see rows after a 60k-row upload.
+        if stats.total_raw == 0:
+            raise ReportParseError("The file has headers but no data rows.")
+        raise ReportParseError(
+            f"All {stats.total_raw} data rows were filtered out "
+            f"({stats.dropped_status} by STATUS, {stats.dropped_brand} by PRIMARY_BRAND, "
+            f"{stats.dropped_country} by COUNTRY, {stats.dropped_job_role} by JOBROLE). "
+            "Check the report's column values match Active / KFC / Australia."
+        )
+    return rows, stats
 
 
 def _parse_xlsx(data: bytes) -> list[list[str]]:
@@ -284,8 +426,8 @@ def _parse_delimited(data: bytes) -> list[list[str]]:
     return [list(row) for row in reader]
 
 
-def parse_report(data: bytes, filename: str) -> list[EmployeeRow]:
-    """Parse CSV / TSV / XLSX bytes into normalised EmployeeRows.
+def parse_report(data: bytes, filename: str) -> tuple[list[EmployeeRow], RowFilterStats]:
+    """Parse CSV / TSV / XLSX bytes into normalised EmployeeRows + filter stats.
 
     Detection: file extension first, then content sniff (XLSX files start
     with the ZIP magic ``PK\\x03\\x04``).
