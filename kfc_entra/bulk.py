@@ -315,6 +315,14 @@ def iter_apply_mappings(
             pending.append({
                 "code": code, "label": label, "email": email_key,
                 "user_id": user_id, "group_id": target["group_id"],
+                # Row context so a "failed" event can include enough info
+                # to be re-downloaded as a self-contained mini-report
+                # that uploads cleanly through parse_report.
+                "name": row.name,
+                "store": row.store,
+                "store_id": row.store_id,
+                "job_role": row.job_role,
+                "franchisee_id": row.franchisee,
                 # Promote later if this row holds a community-admin role and
                 # the caller opted in. Job role is normalised so
                 # "Assistant Manager" / "assistant manager" / "Assistant  Manager"
@@ -474,12 +482,21 @@ def iter_apply_mappings(
                     # Drop the placeholder entry / entries so the add phase
                     # doesn't try to use it. Promote it to a skip line.
                     drop = [p for p in pending if p.get("email") == email and p.get("user_id") == INVITE_PLACEHOLDER]
+                    dropped_ctx: dict = {}
                     for d in drop:
                         pending.remove(d)
                         code_for_email = code_for_email or d["code"]
+                        if not dropped_ctx:
+                            dropped_ctx = d
                     bucket(code_for_email or "UNK")["failed"] = bucket(code_for_email or "UNK").get("failed", 0) + 1
                     failures.append({
                         "user": email, "franchisee": code_for_email,
+                        "email": email,
+                        "name": dropped_ctx.get("name") or invite_candidates.get(email, ""),
+                        "store": dropped_ctx.get("store", ""),
+                        "store_id": dropped_ctx.get("store_id", ""),
+                        "job_role": dropped_ctx.get("job_role", ""),
+                        "franchisee_id": dropped_ctx.get("franchisee_id", ""),
                         "reason": err or "invite failed", "action": "invite",
                     })
                     yield {
@@ -511,6 +528,12 @@ def iter_apply_mappings(
                 if outcome == "failed":
                     failures.append({
                         "user": c["label"], "franchisee": c["code"],
+                        "email": c.get("email", ""),
+                        "name": c.get("name", ""),
+                        "store": c.get("store", ""),
+                        "store_id": c.get("store_id", ""),
+                        "job_role": c.get("job_role", ""),
+                        "franchisee_id": c.get("franchisee_id", ""),
                         "reason": reason, "action": "add",
                     })
                 yield {
@@ -556,6 +579,12 @@ def iter_apply_mappings(
                     if outcome == "failed":
                         failures.append({
                             "user": c["label"], "franchisee": c["code"],
+                            "email": c.get("email", ""),
+                            "name": c.get("name", ""),
+                            "store": c.get("store", ""),
+                            "store_id": c.get("store_id", ""),
+                            "job_role": c.get("job_role", ""),
+                            "franchisee_id": c.get("franchisee_id", ""),
                             "reason": reason, "action": "promote",
                         })
                     yield {

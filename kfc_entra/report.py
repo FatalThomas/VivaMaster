@@ -48,6 +48,9 @@ _HEADER_MAP = {
     "email": "email",
     "e mail": "email",
     "email address": "email",
+    # Header from the older failures-CSV format (v1.0.45 and earlier)
+    # so a re-uploaded failures CSV from those builds still works.
+    "user": "email",
     "yammer id": "yammer_id",
     "yammerid": "yammer_id",
     "entra id": "yammer_id",
@@ -321,6 +324,14 @@ def _rows_from_table(table: list[list[str]]) -> tuple[list[EmployeeRow], RowFilt
         has_job_role_column="job_role" in found,
     )
 
+    # "New format" = the Yum! payroll export, identified by STATUS or
+    # PRIMARY_BRAND in the headers. Only when we're confident it's that
+    # export do we apply the JOBROLE allowlist - older "Employee Yammer
+    # Status" / hand-crafted reports often have a Job Role column too
+    # but the user has already pre-filtered them, so we'd otherwise
+    # silently drop rows they expect to come through.
+    is_new_format = stats.has_status_column or stats.has_brand_column
+
     rows: list[EmployeeRow] = []
     for i, raw in enumerate(table[1:], start=1):
         values = {attr: str(raw[idx] or "").strip() if idx < len(raw) else ""
@@ -354,7 +365,7 @@ def _rows_from_table(table: list[list[str]]) -> tuple[list[EmployeeRow], RowFilt
             if country_val and country_val != "australia":
                 stats.dropped_country += 1
                 continue
-        if stats.has_job_role_column:
+        if stats.has_job_role_column and is_new_format:
             role_val = values.get("job_role", "")
             if role_val and not is_allowed_job_role(role_val):
                 stats.dropped_job_role += 1

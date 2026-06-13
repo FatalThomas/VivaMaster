@@ -119,6 +119,36 @@
     return lines.join("\r\n") + "\r\n";
   }
 
+  /* Build a re-uploadable mini-report from a failures list. Each row
+     carries enough context (set in bulk.py's pending dict) for the
+     Report page's parse_report to bucket it back into the right
+     Franchisee / Store at retry time. */
+  function kfcFailuresAsReport(failedList) {
+    var headers = [
+      "EMAIL", "FIRSTNAME", "LASTNAME", "FRANCHISEID", "STOREID", "STORE",
+      "JOBROLE", "STATUS", "PRIMARY_BRAND", "COUNTRY", "REASON",
+    ];
+    var rows = failedList.map(function (f) {
+      var full = (f.name || "").trim();
+      var parts = full ? full.split(/\s+/) : [];
+      var first = parts.shift() || "";
+      var last = parts.join(" ");
+      // FRANCHISEID: explicit franchisee_id from the failure event
+      // (set in store mode) wins; otherwise the bucket code is the
+      // franchisee itself (franchisee mode).
+      var fz = f.franchisee_id || f.franchisee || "";
+      var store = f.store || "";
+      var storeId = f.store_id || "";
+      var email = (f.email || f.user || "").toString();
+      return [
+        email, first, last, fz, storeId, store,
+        f.job_role || "", "Active", "KFC", "Australia",
+        f.reason || "",
+      ];
+    });
+    return { headers: headers, rows: rows };
+  }
+
   function kfcDownloadCsv(filename, headers, rows) {
     var safeName = (filename || "download.csv");
     if (!/\.csv$/i.test(safeName)) safeName = safeName + ".csv";
@@ -328,10 +358,16 @@
         btn.className = "btn btn-secondary";
         btn.textContent = "Download failures CSV (" + failedList.length + ")";
         btn.addEventListener("click", function () {
+          // Emit a re-uploadable report-format CSV (EMAIL, FIRSTNAME,
+          // LASTNAME, FRANCHISEID, STOREID, STORE, JOBROLE, STATUS,
+          // PRIMARY_BRAND, COUNTRY, REASON). The Report page accepts
+          // it directly, so retrying a failed batch in a fresh session
+          // is just "download CSV -> Report -> upload".
+          var bundle = kfcFailuresAsReport(failedList);
           kfcDownloadCsv(
             cfg.failuresCsvName || "failures.csv",
-            ["user", "franchisee", "reason"],
-            failedList.map(function (f) { return [f.user, f.franchisee || "", f.reason]; })
+            bundle.headers,
+            bundle.rows
           );
         });
         card.appendChild(btn);
@@ -500,10 +536,11 @@
         btn.className = "btn btn-secondary";
         btn.textContent = "Download failures CSV (" + failures.length + ")";
         btn.addEventListener("click", function () {
+          var bundle = kfcFailuresAsReport(failures);
           kfcDownloadCsv(
             cfg.failuresCsvName || "failures.csv",
-            ["user", "franchisee", "reason"],
-            failures.map(function (f) { return [f.user, f.franchisee || "", f.reason]; })
+            bundle.headers,
+            bundle.rows
           );
         });
         panel.appendChild(btn);
