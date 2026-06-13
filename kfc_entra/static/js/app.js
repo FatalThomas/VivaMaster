@@ -100,10 +100,51 @@
   }
 
   /* ---------- CSV download ----------
-     pywebview's WebView2 backend silently blocks JS-initiated Blob URL
-     downloads, so we POST to /downloads/csv which sends back a real
-     Content-Disposition attachment - the browser handles that natively. */
+     pywebview's WebView2 backend swallows the default browser
+     download flow, so when running inside the desktop exe we hand the
+     file to the Python JS-API which opens a native save-as dialog.
+     Falls back to the legacy POST-to-/downloads/csv path in a plain
+     browser (which then handles Content-Disposition itself). */
+  function kfcCsvString(headers, rows) {
+    function esc(v) {
+      var s = (v == null ? "" : String(v));
+      if (s.indexOf('"') >= 0 || s.indexOf(',') >= 0 || s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0) {
+        s = '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    }
+    var lines = [];
+    if (headers && headers.length) lines.push(headers.map(esc).join(","));
+    (rows || []).forEach(function (r) { lines.push(r.map(esc).join(",")); });
+    return lines.join("\r\n") + "\r\n";
+  }
+
   function kfcDownloadCsv(filename, headers, rows) {
+    var safeName = (filename || "download.csv");
+    if (!/\.csv$/i.test(safeName)) safeName = safeName + ".csv";
+
+    // Desktop path: pywebview JS-API gives us a real save dialog.
+    if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_csv === "function") {
+      var content = kfcCsvString(headers, rows);
+      window.pywebview.api.save_csv(safeName, content)
+        .then(function (res) {
+          if (res && res.ok) {
+            kfcToast("Saved to " + res.path, "success");
+          } else if (res && res.cancelled) {
+            // user cancelled - silent
+          } else {
+            kfcToast("Couldn't save CSV: " + (res && res.error || "unknown error"), "error");
+          }
+        })
+        .catch(function (err) {
+          kfcToast("Save dialog failed: " + (err && err.message || err), "error");
+        });
+      return;
+    }
+
+    // Browser fallback: hidden-form POST to /downloads/csv. The server
+    // sends back Content-Disposition: attachment so the browser
+    // prompts a save. (Won't fire reliably in a frozen WebView2.)
     var form = document.createElement("form");
     form.method = "POST";
     form.action = "/downloads/csv";
@@ -112,7 +153,7 @@
     input.type = "hidden";
     input.name = "payload";
     input.value = JSON.stringify({
-      filename: filename,
+      filename: safeName,
       headers: headers,
       rows: rows,
     });
@@ -216,6 +257,9 @@
       } else if (ev.type === "done") {
         if (cancelBtn) cancelBtn.hidden = true;
         renderSummary(ev.summary);
+      } else if (ev.type === "cancelled") {
+        cancelled = true;
+        renderCancelled();
       } else if (ev.type === "error") {
         statusEl.textContent = "Failed";
         panel.querySelector(".spinner").remove();

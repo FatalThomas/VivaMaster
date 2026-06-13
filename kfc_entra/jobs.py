@@ -175,7 +175,15 @@ def start(
             job.append({"type": "error", "message": str(exc)})
             job.finish("error")
             return
-        job.finish("done")
+        # Factory generators may swallow their own loop on
+        # job.cancel_requested and return early without yielding the
+        # final event; honour the cancel at the boundary so the panel
+        # gets a cancelled state instead of a misleading "done".
+        if job.cancel_requested:
+            job.append({"type": "cancelled", "message": "Cancelled by user."})
+            job.finish("cancelled")
+        else:
+            job.finish("done")
 
     threading.Thread(
         target=worker,
