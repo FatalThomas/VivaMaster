@@ -425,8 +425,20 @@ def _parse_xlsx(data: bytes) -> list[list[str]]:
     except Exception as exc:
         raise ReportParseError(f"Could not open the Excel file: {exc}") from exc
     sheet = workbook.active
+
+    def cell_to_str(v):
+        # openpyxl returns numeric cells as int or float. STOREID columns
+        # in particular come back as floats ("1300.0") which then miss the
+        # store_directory lookup. Normalise integer-valued floats to plain
+        # int strings so "1300.0" -> "1300".
+        if v is None:
+            return ""
+        if isinstance(v, float) and v.is_integer():
+            return str(int(v))
+        return str(v)
+
     table = [
-        ["" if cell is None else str(cell) for cell in row]
+        [cell_to_str(cell) for cell in row]
         for row in sheet.iter_rows(values_only=True)
     ]
     workbook.close()

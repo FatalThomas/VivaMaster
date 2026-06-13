@@ -6,8 +6,17 @@ into the human-readable Store name so the Apply-by-Store flow keeps
 producing "KFC <store>" group names like "KFC Forster" rather than
 "KFC 1234". Regenerate by re-running tools/build_store_directory.py
 against a fresh AU_Store_Listing_*.csv when stores open or close.
+
+The Yum! payroll export prefixes its STOREID values with "61K", so
+"61K1300" really means store 1300 (Pagewood). The lookup strips any
+non-digit prefix and the leading zeros so 61K1300 / 1300 / 01300 /
+"1300.0" all hit the same directory entry.
 """
 from __future__ import annotations
+
+import re
+
+_TRAILING_DIGITS_RE = re.compile(r"(\d+)$")
 
 
 STORE_DIRECTORY: dict[str, str] = {
@@ -876,18 +885,46 @@ STORE_DIRECTORY: dict[str, str] = {
 }
 
 
-def lookup_store_name(store_id: str) -> str:
-    """Return the store name for a STOREID, or "" when unknown.
+def _to_canonical(store_id: str) -> str:
+    """Reduce any STOREID variant to its bare numeric form.
 
-    Leading-zero variants ("01300") are normalised against the
-    directory ("1300") since the payroll export sometimes pads.
+    Examples:
+      "1300"      -> "1300"
+      "01300"     -> "1300"
+      "1300.0"    -> "1300"
+      "61K1300"   -> "1300"
+      "61K01300"  -> "1300"
+      "61K1300.0" -> "1300"
+      ""          -> ""
     """
     s = (store_id or "").strip()
     if not s:
         return ""
+    # Excel may coerce numeric cells to floats: drop a trailing ".0"
+    # whether or not the prefix is digits ("61K1300.0" still resolves).
+    if s.endswith(".0"):
+        s = s[:-2]
+    # Grab the last run of digits; that's the store number under any
+    # 61K-style or other non-digit prefix.
+    m = _TRAILING_DIGITS_RE.search(s)
+    if not m:
+        return ""
+    return m.group(1).lstrip("0") or "0"
+
+
+def lookup_store_name(store_id: str) -> str:
+    """Return the store name for a STOREID, or "" when unknown.
+
+    Handles the payroll export's "61K<store>" prefix as well as
+    leading-zero padding, Excel float coercion, and the bare numeric form.
+    """
+    s = (store_id or "").strip()
+    if not s:
+        return ""
+    # Try the raw value first - covers any oddball directory keys.
     if s in STORE_DIRECTORY:
         return STORE_DIRECTORY[s]
-    s2 = s.lstrip("0")
-    if s2 and s2 in STORE_DIRECTORY:
-        return STORE_DIRECTORY[s2]
+    canon = _to_canonical(s)
+    if canon and canon in STORE_DIRECTORY:
+        return STORE_DIRECTORY[canon]
     return ""
