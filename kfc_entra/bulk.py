@@ -270,70 +270,38 @@ def iter_apply_mappings(
                     "message": f"Resolved {done} of {len(pending_emails)} emails...",
                 }
 
-    # --- if invite_missing: any email still unresolved gets a Guest
-    # invitation via /invitations $batch (20 per round-trip). Successful
-    # invites land their new user_id in email_cache, so the row flows
-    # straight into the add phase like an already-provisioned colleague.
-    invite_failures: dict[str, str] = {}
+    # --- if invite_missing: stage a Guest invitation for every email the
+    # lookup phase couldn't resolve. Actual invites fire AFTER the "start"
+    # event so each one emits a per-row progress event (visible in the
+    # bulk-panel log), and the total bar reflects them too.
+    INVITE_PLACEHOLDER = "__pending_invite__"
+    invite_candidates: dict[str, str] = {}
     if invite_missing:
-        # Build unique (email, display_name) pairs for rows whose email
-        # didn't resolve. First name wins per email so we don't overwrite
-        # a populated display_name with a blank one from a later row.
-        invite_payload: dict[str, str] = {}
         for row in work:
             e = (row.email or "").strip()
             if not e or email_cache.get(e):
                 continue
-            invite_payload.setdefault(e, row.name or e.split("@", 1)[0])
-        if invite_payload:
-            invite_items = list(invite_payload.items())
-            yield {
-                "type": "phase",
-                "message": (
-                    f"Inviting {len(invite_items)} user(s) as Guests "
-                    "(batched 20 at a time)..."
-                ),
-            }
-            for i in range(0, len(invite_items), BATCH_SIZE):
-                chunk = invite_items[i : i + BATCH_SIZE]
-                invitations = [
-                    {
-                        "email": email,
-                        "display_name": display,
-                        "redirect_url": invite_redirect_url,
-                        "send_invitation_message": send_invitation_message,
-                    }
-                    for email, display in chunk
-                ]
-                try:
-                    results = client.batch_invite_guests(invitations)
-                except GraphError as exc:
-                    results = {email: (None, exc.message) for email, _ in chunk}
-                for email, (uid, err) in results.items():
-                    if uid:
-                        email_cache[email] = uid
-                    else:
-                        invite_failures[email] = err or "invite failed"
-                done = min(i + BATCH_SIZE, len(invite_items))
-                if done % 200 == 0 or done == len(invite_items):
-                    yield {
-                        "type": "phase",
-                        "message": f"Invited {done} of {len(invite_items)} so far...",
-                    }
+            invite_candidates.setdefault(e, row.name or e.split("@", 1)[0])
+        # Optimistic cache - classify these rows AS IF the invite already
+        # succeeded so they land in `pending` rather than `skipped`. After
+        # each batch invite finishes we patch the real user_id in.
+        for email in invite_candidates:
+            email_cache[email] = INVITE_PLACEHOLDER
 
     for row in work:
         code = _row_code(row)
         label = row.email or row.name or f"row {row.row_number}"
         target = resolved[code]  # guaranteed - we filtered to mapped-only
+        email_key = (row.email or "").strip()
 
         # Always the tenant's answer; ignore the Yammer ID column entirely.
-        user_id = email_cache.get((row.email or "").strip()) if row.email else None
+        user_id = email_cache.get(email_key) if email_key else None
 
         if not user_id:
-            skipped_no_user.append({"code": code, "label": label})
+            skipped_no_user.append({"code": code, "label": label, "email": email_key})
         else:
             pending.append({
-                "code": code, "label": label,
+                "code": code, "label": label, "email": email_key,
                 "user_id": user_id, "group_id": target["group_id"],
                 # Promote later if this row holds a community-admin role and
                 # the caller opted in. Job role is normalised so
@@ -404,8 +372,11 @@ def iter_apply_mappings(
                 })
     total_deletes = len(unique_users_to_delete)
     total_promotes = sum(1 for p in pending if p.get("is_admin")) if promote_community_admins else 0
-
-    total = total_skipped + total_adds + total_promotes + total_removes + total_deletes
+    total_invites = len(invite_candidates)
+    # Adds already counts every row with a (real or placeholder) user_id,
+    # so subtract the invites that will resolve to adds to avoid double-
+    # counting; failed invites end up as skipped via the patch step below.
+    total = total_invites + total_skipped + total_adds + total_promotes + total_removes + total_deletes
     yield {"type": "start", "total": total}
 
     per_franchisee: dict[str, dict] = {}
@@ -420,26 +391,91 @@ def iter_apply_mappings(
                 "removed": 0, "not_in_group": 0,
                 "deleted": 0, "already_gone": 0,
                 "owner_added": 0, "already_owner": 0,
+                "invited": 0,
             },
         )
 
     # --- emit "skipped" events for users we couldn't resolve to Entra IDs.
+    # These are rows where the email was blank, or invite_missing was off
+    # and the lookup found no user. Invite failures emit their own
+    # "failed" progress lines in the invite phase below.
     for s in skipped_no_user:
         emitted += 1
         stats = bucket(s["code"])
         stats["skipped"] += 1
-        email = (s.get("label") or "").strip().lower()
-        invite_err = invite_failures.get(email) if invite_missing else None
-        reason = (
-            f"Invite failed: {invite_err}" if invite_err
-            else "Not in Entra yet (no match by email)"
-        )
         yield {
             "type": "progress", "current": emitted, "total": total,
             "franchisee": s["code"], "user": s["label"],
             "status": "skipped",
-            "reason": reason,
+            "reason": "Not in Entra yet (no match by email)",
         }
+
+    # --- invite phase: batch /invitations $batch (20 per round-trip),
+    # patch the resulting user_id into the matching pending entries.
+    # Each invitation emits a per-row progress event so the user can see
+    # them landing in the log; failed invites are converted to skips on
+    # the spot (the pending entry is dropped so the add phase doesn't
+    # try to use a None user_id).
+    if invite_candidates:
+        yield {
+            "type": "phase",
+            "message": (
+                f"Inviting {len(invite_candidates)} Guest(s) "
+                "(batched 20 at a time)..."
+            ),
+        }
+        invite_items = list(invite_candidates.items())
+        for i in range(0, len(invite_items), BATCH_SIZE):
+            chunk = invite_items[i : i + BATCH_SIZE]
+            invitations = [
+                {
+                    "email": em,
+                    "display_name": disp,
+                    "redirect_url": invite_redirect_url,
+                    "send_invitation_message": send_invitation_message,
+                }
+                for em, disp in chunk
+            ]
+            try:
+                results = client.batch_invite_guests(invitations)
+            except GraphError as exc:
+                results = {em: (None, exc.message) for em, _ in chunk}
+            for email, (uid, err) in results.items():
+                emitted += 1
+                code_for_email = ""
+                if uid:
+                    email_cache[email] = uid
+                    # Patch every pending entry that's still on the placeholder.
+                    for item in pending:
+                        if item.get("email") == email and item.get("user_id") == INVITE_PLACEHOLDER:
+                            item["user_id"] = uid
+                            code_for_email = code_for_email or item["code"]
+                    bucket(code_for_email or "UNK")["invited"] = bucket(code_for_email or "UNK").get("invited", 0) + 1
+                    yield {
+                        "type": "progress", "current": emitted, "total": total,
+                        "franchisee": code_for_email, "user": email,
+                        "status": "invited",
+                        "reason": "Guest invitation sent" if send_invitation_message
+                                  else "Guest account created (no email)",
+                    }
+                else:
+                    # Drop the placeholder entry / entries so the add phase
+                    # doesn't try to use it. Promote it to a skip line.
+                    drop = [p for p in pending if p.get("email") == email and p.get("user_id") == INVITE_PLACEHOLDER]
+                    for d in drop:
+                        pending.remove(d)
+                        code_for_email = code_for_email or d["code"]
+                    bucket(code_for_email or "UNK")["failed"] = bucket(code_for_email or "UNK").get("failed", 0) + 1
+                    failures.append({
+                        "user": email, "franchisee": code_for_email,
+                        "reason": err or "invite failed", "action": "invite",
+                    })
+                    yield {
+                        "type": "progress", "current": emitted, "total": total,
+                        "franchisee": code_for_email, "user": email,
+                        "status": "failed",
+                        "reason": f"Invite failed: {err or 'unknown error'}",
+                    }
 
     # --- batch-add: 20 per Graph round-trip via $batch.
     by_group_add: dict[str, list[dict]] = {}

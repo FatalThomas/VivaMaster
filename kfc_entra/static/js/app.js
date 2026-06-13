@@ -189,6 +189,8 @@
         fillEl.style.width = (ev.total ? (100 * ev.current / ev.total) : 100) + "%";
         if (ev.status === "ok" || ev.status === "added") {
           logLine("line-ok", "✓ " + ev.user);
+        } else if (ev.status === "invited") {
+          logLine("line-ok", "✉ " + ev.user, ev.reason || "Guest invitation sent");
         } else if (ev.status === "already_member") {
           logLine("line-skip", "✓ " + ev.user, "already in the group");
         } else if (ev.status === "removed") {
@@ -237,6 +239,8 @@
       var html =
         '<div class="summary-stats">' +
         '<div class="stat stat-ok"><b>' + ok + '</b><span>added</span></div>' +
+        (summary.invited
+          ? '<div class="stat stat-ok"><b>' + summary.invited + '</b><span>invited</span></div>' : "") +
         (summary.already_member !== undefined
           ? '<div class="stat stat-skip"><b>' + summary.already_member + '</b><span>already member</span></div>' : "") +
         (summary.owner_added
