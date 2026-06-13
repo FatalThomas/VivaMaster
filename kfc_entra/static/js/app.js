@@ -291,6 +291,46 @@
           );
         });
         card.appendChild(btn);
+
+        // Retry failed only - works for any job-managed apply (reports).
+        // Sends the failed emails back to the same start endpoint with
+        // retry_emails set, which filters the row work list to just
+        // those emails. Skips reconcile / delete (server-side safety).
+        if (cfg.body && cfg.body.assignments) {
+          var failedEmails = failedList
+            .map(function (f) { return (f.user || "").toLowerCase(); })
+            .filter(function (e) { return e && e.indexOf("@") > 0; });
+          if (failedEmails.length) {
+            var retryBtn = document.createElement("button");
+            retryBtn.type = "button";
+            retryBtn.className = "btn btn-primary";
+            retryBtn.style.marginLeft = "8px";
+            retryBtn.textContent = "Retry failed (" + failedEmails.length + ")";
+            retryBtn.addEventListener("click", function () {
+              var retryBody = JSON.parse(JSON.stringify(cfg.body || {}));
+              retryBody.retry_emails = failedEmails;
+              retryBody.remove_missing = false;
+              retryBody.delete_missing = false;
+              // Spin up a fresh panel below the summary so the user
+              // can see the retry without losing this run's results.
+              var retryPanel = document.createElement("div");
+              retryPanel.className = "bulk-panel";
+              retryPanel.style.marginTop = "16px";
+              panel.parentElement.insertBefore(retryPanel, panel.nextSibling);
+              kfcRunBulk({
+                url: cfg.url,
+                method: cfg.method,
+                body: retryBody,
+                panel: retryPanel,
+                verb: "Retrying",
+                failuresCsvName: (cfg.failuresCsvName || "failures.csv").replace(/\.csv$/, "-retry.csv"),
+              });
+              retryBtn.disabled = true;
+              retryBtn.textContent = "Retry started";
+            });
+            card.appendChild(retryBtn);
+          }
+        }
       }
       panel.appendChild(card);
       var kind = (summary.failed || 0) > 0 ? "warning" : "success";
@@ -298,55 +338,97 @@
       if (cfg.onDone) cfg.onDone(summary);
     }
 
-    // POST to start the job, then subscribe to its server-side event stream
-    // with auto-reconnect. WiFi cutting out mid-apply no longer kills the
-    // run - the worker thread on the server keeps adding events to the
-    // job buffer and we replay everything we missed when we reconnect.
+    // Two callers shapes:
+    //   1. POST + JSON {job_id, stream_url}  -> job-managed (resumable
+    //      via /jobs/<id>/stream, survives WiFi blips, shows in the
+    //      dock). Used by the report apply routes.
+    //   2. GET or POST with text/event-stream -> the legacy direct-SSE
+    //      pattern (no job manager). Used by /users/convert/stream and
+    //      /offboard/apply/stream. Reusing it keeps those callers
+    //      working until they're migrated too; cancel stops via the
+    //      AbortController only.
     var subscription = null;
     var jobId = null;
+    var method = (cfg.method || "GET").toUpperCase();
+    var legacyController = null;
 
     cancelBtn.addEventListener("click", function () {
-      // Override the default cancel-via-AbortController so we tell the
-      // server thread to stop, not just the local stream socket.
-      if (!jobId) return;
-      fetch("/jobs/" + jobId + "/cancel", {
-        method: "POST", credentials: "same-origin",
-      }).catch(function () { /* server already gone? fine */ });
+      // Job-managed: tell the server thread to stop. Legacy: abort the
+      // local fetch (which kills the SSE stream).
+      if (jobId) {
+        fetch("/jobs/" + jobId + "/cancel", {
+          method: "POST", credentials: "same-origin",
+        }).catch(function () { /* server already gone? fine */ });
+      }
+      if (legacyController) {
+        try { legacyController.abort(); } catch (e) {}
+      }
     });
 
-    return fetch(cfg.url, {
-      method: cfg.method,
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    var fetchOpts = {
+      method: method,
+      headers: { "Accept": "application/json, text/event-stream" },
       credentials: "same-origin",
-      body: JSON.stringify(cfg.body || {}),
-    }).then(function (resp) {
+    };
+    if (method !== "GET" && method !== "HEAD") {
+      fetchOpts.headers["Content-Type"] = "application/json";
+      fetchOpts.body = JSON.stringify(cfg.body || {});
+    }
+
+    return fetch(cfg.url, fetchOpts).then(function (resp) {
       if (!resp.ok) {
-        return resp.json().then(function (j) {
-          throw new Error(j.error || ("Start failed (HTTP " + resp.status + ")"));
+        // Try JSON error envelope first, fall back to plain text.
+        return resp.text().then(function (txt) {
+          var msg = txt;
+          try { var j = JSON.parse(txt); msg = j.error || j.message || txt; } catch (e) {}
+          throw new Error(msg || ("Start failed (HTTP " + resp.status + ")"));
         });
       }
-      return resp.json();
-    }).then(function (info) {
-      jobId = info.job_id;
-      kfcTrackJob(jobId, cfg.verb);
-      subscription = kfcSubscribeJob(info.stream_url, onEvent, {
-        onClose: function (reason) {
-          // Stream ended cleanly (server said stream_end) - nothing to do,
-          // onEvent already handled the "done" event.
-        },
-        onReconnect: function (info) {
-          // Show a transient "reconnecting" hint without clobbering the
-          // running phase / progress text.
-          var hint = document.createElement("span");
-          hint.className = "bulk-reconnect-hint";
-          hint.textContent = " (network blip - resuming...)";
-          var head = panel.querySelector(".bulk-head");
-          if (head && !head.querySelector(".bulk-reconnect-hint")) {
-            head.appendChild(hint);
-            setTimeout(function () { hint.remove(); }, 4000);
-          }
-        },
-      });
+      var ct = (resp.headers.get("Content-Type") || "").toLowerCase();
+
+      // Branch on response content type. JSON = job-managed; SSE =
+      // legacy direct stream.
+      if (ct.indexOf("application/json") === 0) {
+        return resp.json().then(function (info) {
+          jobId = info.job_id;
+          kfcTrackJob(jobId, cfg.verb);
+          subscription = kfcSubscribeJob(info.stream_url, onEvent, {
+            onReconnect: function () {
+              var hint = document.createElement("span");
+              hint.className = "bulk-reconnect-hint";
+              hint.textContent = " (network blip - resuming...)";
+              var head = panel.querySelector(".bulk-head");
+              if (head && !head.querySelector(".bulk-reconnect-hint")) {
+                head.appendChild(hint);
+                setTimeout(function () { hint.remove(); }, 4000);
+              }
+            },
+          });
+        });
+      }
+
+      // Legacy direct-SSE response. Read it inline; no job manager.
+      legacyController = ("AbortController" in window) ? new AbortController() : null;
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+      function pump() {
+        return reader.read().then(function (chunk) {
+          if (chunk.done) return;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          var parts = buffer.split("\n\n");
+          buffer = parts.pop();
+          parts.forEach(function (part) {
+            part.split("\n").forEach(function (line) {
+              if (line.indexOf("data: ") === 0) {
+                try { onEvent(JSON.parse(line.slice(6))); } catch (e) {}
+              }
+            });
+          });
+          return pump();
+        });
+      }
+      return pump();
     }).catch(function (err) {
       if (cancelled || (err && err.name === "AbortError")) {
         renderCancelled();

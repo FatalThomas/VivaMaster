@@ -813,13 +813,24 @@ def report_apply_stream():
     delete_missing = bool(payload.get("delete_missing"))
     invite_missing = bool(payload.get("invite_missing"))
     send_invitation_message = bool(payload.get("send_invitation_message", True))
+    retry_emails = payload.get("retry_emails") or None
+    if retry_emails is not None and not isinstance(retry_emails, list):
+        retry_emails = None
     # Safety belt: delete is only meaningful as a sub-option of remove.
     if delete_missing and not remove_missing:
+        delete_missing = False
+    # On retry, never reconcile / delete - we're only re-trying the
+    # exact rows that failed last time, not redoing the whole pass.
+    if retry_emails:
+        remove_missing = False
         delete_missing = False
     client = GraphClient(get_access_token())
     cached_lookup = _load_lookup(upload_id) or None
 
-    label = f"Apply by Franchisee ({len(assignments)} group(s))"
+    if retry_emails:
+        label = f"Retry failed rows ({len(retry_emails)})"
+    else:
+        label = f"Apply by Franchisee ({len(assignments)} group(s))"
     started_from = request.referrer or url_for(
         "main.report_preview", upload_id=upload_id
     )
@@ -838,6 +849,7 @@ def report_apply_stream():
                 invite_missing=invite_missing,
                 invite_redirect_url=invite_redirect_url,
                 send_invitation_message=send_invitation_message,
+                email_allowlist=set(retry_emails) if retry_emails else None,
             ):
                 if job.cancel_requested:
                     return
@@ -1008,24 +1020,35 @@ def report_apply_stores_stream():
     promote_community_admins = bool(payload.get("promote_community_admins"))
     invite_missing = bool(payload.get("invite_missing"))
     send_invitation_message = bool(payload.get("send_invitation_message", True))
+    retry_emails = payload.get("retry_emails") or None
+    if retry_emails is not None and not isinstance(retry_emails, list):
+        retry_emails = None
     if delete_missing and not remove_missing:
+        delete_missing = False
+    if retry_emails:
+        remove_missing = False
         delete_missing = False
 
     # Persist the chosen store mappings so the next upload remembers them.
+    # Skip on retry - the mappings are already saved from the original run.
     saved_any = False
-    for store, mapping in assignments.items():
-        gid = (mapping.get("group_id") or "").strip()
-        gname = (mapping.get("group_name") or "").strip()
-        if gid and gname:
-            save_store_mapping(store, gid, gname)
-            saved_any = True
+    if not retry_emails:
+        for store, mapping in assignments.items():
+            gid = (mapping.get("group_id") or "").strip()
+            gname = (mapping.get("group_name") or "").strip()
+            if gid and gname:
+                save_store_mapping(store, gid, gname)
+                saved_any = True
 
     client = GraphClient(get_access_token())
     if saved_any:
         _cloud_push_silent(client)
     cached_lookup = _load_lookup(upload_id) or None
 
-    label = f"Apply by Store ({len(assignments)} group(s))"
+    if retry_emails:
+        label = f"Retry failed rows by Store ({len(retry_emails)})"
+    else:
+        label = f"Apply by Store ({len(assignments)} group(s))"
     started_from = request.referrer or url_for(
         "main.report_preview_stores", upload_id=upload_id
     )
@@ -1046,6 +1069,7 @@ def report_apply_stores_stream():
                 invite_missing=invite_missing,
                 invite_redirect_url=invite_redirect_url,
                 send_invitation_message=send_invitation_message,
+                email_allowlist=set(retry_emails) if retry_emails else None,
             ):
                 if job.cancel_requested:
                     return

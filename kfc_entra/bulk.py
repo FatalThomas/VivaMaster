@@ -117,6 +117,7 @@ def iter_apply_mappings(
     invite_missing: bool = False,
     invite_redirect_url: str = "https://myapps.microsoft.com",
     send_invitation_message: bool = True,
+    email_allowlist: set[str] | None = None,
 ) -> Iterator[dict]:
     """Add (and optionally remove + delete) report rows from per-bucket groups.
 
@@ -190,6 +191,14 @@ def iter_apply_mappings(
             return _row_code(row).upper() in {"", "UNK", "UNKNOWN"}
         return row.is_unknown
 
+    # Normalise the retry allowlist (if any) to lowercase emails so it
+    # matches the EmployeeRow.email field which the parser lowercases.
+    allowed = (
+        {(e or "").strip().lower() for e in email_allowlist if e}
+        if email_allowlist is not None
+        else None
+    )
+
     work: list[EmployeeRow] = []
     untouched_by_code: dict[str, int] = {}
     for row in rows:
@@ -199,6 +208,9 @@ def iter_apply_mappings(
             continue
         if code not in resolved:
             untouched_by_code[code] = untouched_by_code.get(code, 0) + 1
+            continue
+        # Retry mode: only process rows whose email made the allowlist.
+        if allowed is not None and (row.email or "").strip().lower() not in allowed:
             continue
         work.append(row)
 

@@ -70,13 +70,33 @@ class GraphClient:
     # ---------- low level ----------
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = path if path.startswith("http") else f"{GRAPH_BASE}{path}"
-        response = requests.request(
-            method,
-            url,
-            headers=self._headers,
-            timeout=DEFAULT_TIMEOUT,
-            **kwargs,
-        )
+
+        # Auto-retry on Microsoft Graph throttling. /$batch sub-requests
+        # carry their own per-row 429s (handled by each batch_* helper);
+        # this is the outer-request 429, which happens when the tenant
+        # hits an overall rate limit. Honour Retry-After (seconds), with
+        # exponential fallback when the header's missing or absurd.
+        max_429_retries = 6
+        attempt = 0
+        while True:
+            response = requests.request(
+                method,
+                url,
+                headers=self._headers,
+                timeout=DEFAULT_TIMEOUT,
+                **kwargs,
+            )
+            if response.status_code != 429 or attempt >= max_429_retries:
+                break
+            retry_after = response.headers.get("Retry-After", "")
+            try:
+                wait = max(1, min(60, int(retry_after)))
+            except (TypeError, ValueError):
+                wait = min(60, 2 ** attempt)
+            import time as _time
+            _time.sleep(wait)
+            attempt += 1
+
         if response.status_code >= 400:
             try:
                 payload = response.json()
