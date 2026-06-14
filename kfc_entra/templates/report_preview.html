@@ -51,11 +51,15 @@
     <button type="button" class="btn btn-secondary" id="xref-btn">
       &#x21bb; Check against tenant
     </button>
+    <button type="button" class="btn btn-secondary" id="invite-missing-btn" hidden>
+      &#9993; Invite missing users
+    </button>
     <span class="muted" id="xref-status">
       Per-Franchisee badges show row counts. Click to fill in
       <b>in tenant</b> / <b>not in tenant</b> based on actual email lookup.
     </span>
   </div>
+  <div class="bulk-panel" id="invite-panel" hidden></div>
 
   <div class="report-toolbar">
     <label class="checkbox">
@@ -387,6 +391,16 @@
         } else if (ev.type === "done") {
           xrefStatus.innerHTML = "<b>" + ev.in_tenant + "</b> in tenant, " +
             "<b>" + ev.missing + "</b> not in tenant. Cached &mdash; apply will skip the resolve phase.";
+          var inviteBtn = document.getElementById("invite-missing-btn");
+          if (inviteBtn) {
+            if (ev.missing > 0) {
+              inviteBtn.hidden = false;
+              inviteBtn.dataset.count = ev.missing;
+              inviteBtn.innerHTML = "&#9993; Invite " + ev.missing + " missing user(s)";
+            } else {
+              inviteBtn.hidden = true;
+            }
+          }
           fetch({{ url_for('main.report_lookup_json', upload_id=upload_id) | tojson }},
                 { credentials: "same-origin" })
             .then(function (r) { return r.json(); })
@@ -408,6 +422,37 @@
       xrefBtn.innerHTML = orig;
     });
   });
+
+  /* ---- standalone "Invite missing users" ----
+     Visible only after Check-against-tenant has confirmed at least one
+     not-in-tenant email. Sends a Guest invitation per row whose email
+     is in the cached lookup as None - no mappings required, no group
+     adds. Apply later (or re-Check) to wire them into groups. */
+  var inviteBtn = document.getElementById("invite-missing-btn");
+  var invitePanel = document.getElementById("invite-panel");
+  if (inviteBtn) {
+    inviteBtn.addEventListener("click", function () {
+      var count = parseInt(inviteBtn.dataset.count || "0", 10);
+      if (!count) return;
+      kfcConfirm({
+        title: "Invite " + count + " user(s) as Guests?",
+        bodyHtml: "Each gets a Guest invitation. Microsoft will mail them an invite by default (untick below to suppress).",
+        confirmLabel: "Invite " + count + " user(s)",
+      }).then(function (ok) {
+        if (!ok) return;
+        kfcBusy(inviteBtn, true);
+        kfcRunBulk({
+          url: {{ url_for('main.report_invite_missing', upload_id=upload_id) | tojson }},
+          method: "POST",
+          body: { send_invitation_message: true },
+          panel: invitePanel,
+          verb: "Inviting",
+          failuresCsvName: "invite-failures.csv",
+          onDone: function () { kfcBusy(inviteBtn, false); },
+        });
+      });
+    });
+  }
 })();
 </script>
 {% endblock %}

@@ -841,6 +841,97 @@ def iter_cross_reference(
     }
 
 
+def iter_invite_missing(
+    client: GraphClient,
+    candidates: list[tuple[str, str]],
+    invite_redirect_url: str = "https://myapps.microsoft.com",
+    send_invitation_message: bool = True,
+) -> Iterator[dict]:
+    """Invite a batch of report emails as Guests without touching groups.
+
+    ``candidates`` is a list of ``(email, display_name)`` pairs - typically
+    the rows whose email didn't resolve during the preview's cross-
+    reference pass. We /invitations $batch them 20 at a time, emit one
+    progress event per result, and finish with a summary the bulk panel
+    can render.
+
+    Used by the "Invite missing users" button on the report preview, so
+    you can populate the tenant with the report's Guests before going
+    near the apply / mapping flow.
+    """
+    total = len(candidates)
+    yield {"type": "start", "total": total}
+    if total == 0:
+        yield {
+            "type": "done",
+            "summary": {
+                "total": 0, "succeeded": 0, "invited": 0,
+                "failed": 0, "failures": [],
+            },
+        }
+        return
+
+    BATCH_SIZE = 20
+    invited = 0
+    failures: list[dict] = []
+    emitted = 0
+    invited_uids: dict[str, str] = {}
+
+    for i in range(0, total, BATCH_SIZE):
+        chunk = candidates[i : i + BATCH_SIZE]
+        invitations = [
+            {
+                "email": em,
+                "display_name": dn or em.split("@", 1)[0],
+                "redirect_url": invite_redirect_url,
+                "send_invitation_message": send_invitation_message,
+            }
+            for em, dn in chunk
+        ]
+        try:
+            results = client.batch_invite_guests(invitations)
+        except GraphError as exc:
+            results = {em: (None, exc.message) for em, _ in chunk}
+        for email, (uid, err) in results.items():
+            emitted += 1
+            if uid:
+                invited += 1
+                invited_uids[email] = uid
+                yield {
+                    "type": "progress", "current": emitted, "total": total,
+                    "user": email,
+                    "status": "invited",
+                    "reason": (
+                        "Guest invitation sent" if send_invitation_message
+                        else "Guest account created (no email)"
+                    ),
+                }
+            else:
+                failures.append({
+                    "user": email,
+                    "email": email,
+                    "reason": err or "invite failed",
+                    "action": "invite",
+                })
+                yield {
+                    "type": "progress", "current": emitted, "total": total,
+                    "user": email,
+                    "status": "failed",
+                    "reason": f"Invite failed: {err or 'unknown error'}",
+                }
+
+    yield {
+        "type": "done",
+        "summary": {
+            "total": total,
+            "succeeded": invited,
+            "invited": invited,
+            "failed": len(failures),
+            "failures": failures,
+        },
+    }
+
+
 def iter_bulk_offboard(
     client: GraphClient,
     emails: Iterable[str],

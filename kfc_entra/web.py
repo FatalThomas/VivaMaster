@@ -39,6 +39,7 @@ from .bulk import (
     iter_bulk_offboard,
     iter_convert_to_member,
     iter_cross_reference,
+    iter_invite_missing,
     parse_offboard_emails,
 )
 from .graph_client import GraphClient, GraphError
@@ -910,6 +911,90 @@ def report_cross_reference(upload_id: str):
         _stash_lookup(upload_id, lookup)
 
     return _sse_response(stream())
+
+
+@main_bp.route("/report/preview/<upload_id>/invite-missing/stream", methods=["POST"])
+@login_required
+def report_invite_missing(upload_id: str):
+    """Kick off a job that invites every report row whose email didn't
+    resolve during cross-reference. Returns ``{job_id, stream_url}`` so
+    the bulk panel + dock light up like every other apply.
+
+    The user must have run cross-reference first - we only invite the
+    cached "not in tenant" emails to avoid surprise invitations.
+    """
+    rows = _load_upload(upload_id)
+    if rows is None:
+        return jsonify(
+            error="Upload expired or not found - please re-upload the report.",
+        ), 404
+
+    lookup = _load_lookup(upload_id) or {}
+    payload = request.get_json(silent=True) or {}
+    send_invitation_message = bool(payload.get("send_invitation_message", True))
+
+    # Build the candidate list: email + best-effort display_name from the
+    # first row that mentions each email. Skip dupes and rows whose email
+    # is already known to be in tenant.
+    candidates: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for r in rows:
+        e = (r.email or "").strip().lower()
+        if not e or e in seen:
+            continue
+        seen.add(e)
+        # Only invite emails we've checked and confirmed are NOT in tenant.
+        if lookup.get(e):
+            continue
+        if e not in lookup:
+            continue  # never checked yet - require xref first
+        candidates.append((e, r.name or ""))
+
+    if not candidates:
+        return jsonify(
+            error=(
+                "Nothing to invite. Run \"Check against tenant\" first, "
+                "or all checked emails already exist in the tenant."
+            ),
+        ), 400
+
+    client = GraphClient(get_access_token())
+    cfg = current_app.config["KFC_CONFIG"]
+    invite_redirect_url = cfg.invite_redirect_url
+
+    label = f"Invite missing users ({len(candidates)})"
+    started_from = request.referrer or url_for(
+        "main.report_preview", upload_id=upload_id
+    )
+
+    def factory(job):
+        def gen():
+            for ev in iter_invite_missing(
+                client,
+                candidates,
+                invite_redirect_url=invite_redirect_url,
+                send_invitation_message=send_invitation_message,
+            ):
+                if job.cancel_requested:
+                    return
+                # Update the xref cache as invites land so a follow-up
+                # cross-reference / apply doesn't try to invite them
+                # again.
+                if ev.get("type") == "progress" and ev.get("status") == "invited":
+                    # The iterator doesn't pass uid through the event,
+                    # but for the cache we only need "is now in tenant"
+                    # which is true the moment Graph accepted the
+                    # invite. Mark with a sentinel that callers treat
+                    # as truthy until the next real cross-reference.
+                    lookup[ev.get("user")] = "invited-pending"
+                yield ev
+            _stash_lookup(upload_id, lookup)
+        return gen()
+
+    job = job_registry.start("invite_missing", label, started_from, factory)
+    return jsonify(job_id=job.id, stream_url=url_for(
+        "main.job_stream", job_id=job.id
+    ))
 
 
 # ---------- store mode preview & apply ----------
