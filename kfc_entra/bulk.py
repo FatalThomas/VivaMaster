@@ -932,6 +932,179 @@ def iter_invite_missing(
     }
 
 
+def iter_resend_pending_invites(
+    client: GraphClient,
+    emails: list[str],
+    invite_redirect_url: str = "https://myapps.microsoft.com",
+) -> Iterator[dict]:
+    """One-pass: classify each email + re-invite the PendingAcceptance ones.
+
+    The Re-invites page assumes every email in the upload was already
+    invited at some point. For each one we want to:
+
+      1. Look it up in the tenant.
+      2. Read ``externalUserState``:
+           - "PendingAcceptance"  -> re-send the invite email (Graph
+                                     treats a fresh /invitations call
+                                     as a re-send).
+           - "Accepted"           -> no action, log "accepted".
+           - any other (e.g. None
+             on a Member account) -> no action, log "in_tenant_member".
+           - user not found       -> log "not_found" so the operator
+                                     knows the assumption was wrong.
+
+    Each batch of 20 emails does ONE lookup + (at most) ONE invitations
+    $batch round-trip, so a 1000-email CSV completes in ~100 Graph
+    calls.
+
+    Events drop straight into kfcRunBulk:
+      progress.status == "invited"          -> resent successfully
+      progress.status == "accepted"         -> skip line
+      progress.status == "in_tenant_member" -> skip line
+      progress.status == "not_found"        -> skip line ("assumption
+                                                wrong - was never
+                                                actually invited")
+      progress.status == "failed"           -> the /invitations $batch
+                                                rejected this email
+    """
+    # De-dupe + lower the input list.
+    seen: set[str] = set()
+    unique: list[str] = []
+    for e in emails:
+        e2 = (e or "").strip().lower()
+        if e2 and e2 not in seen:
+            seen.add(e2)
+            unique.append(e2)
+    total = len(unique)
+    yield {"type": "phase", "message": f"Checking {total} email(s) in batches of 20..."}
+    yield {"type": "start", "total": total}
+
+    BATCH_SIZE = 20
+    emitted = 0
+    resent = 0
+    accepted = 0
+    members = 0
+    not_found = 0
+    failures: list[dict] = []
+
+    def bucket() -> dict:
+        return {
+            "added": 0, "already_member": 0, "skipped": 0, "failed": 0,
+            "invited": 0,
+        }
+    per: dict[str, dict] = {"reinvite": bucket()}
+
+    for i in range(0, total, BATCH_SIZE):
+        chunk = unique[i : i + BATCH_SIZE]
+        # 1. Look up the batch.
+        try:
+            lookup = client.batch_get_users_by_email(chunk)
+        except GraphError as exc:
+            lookup = {e: None for e in chunk}
+            lookup_err = exc.message
+        else:
+            lookup_err = ""
+
+        to_resend: list[tuple[str, str]] = []  # (email, display_name)
+        # 2. Classify + collect resend candidates.
+        for email in chunk:
+            user = lookup.get(email)
+            if user is None:
+                not_found += 1
+                per["reinvite"]["skipped"] += 1
+                emitted += 1
+                yield {
+                    "type": "progress", "current": emitted, "total": total,
+                    "franchisee": "reinvite", "user": email,
+                    "status": "not_found",
+                    "reason": lookup_err or (
+                        "Not in tenant - assumption was wrong, was never invited"
+                    ),
+                }
+                continue
+            state = (user.external_user_state or "").lower()
+            if state == "pendingacceptance":
+                to_resend.append((email, user.display_name or email.split("@", 1)[0]))
+                continue  # progress event emitted after the invite call
+            elif state == "accepted":
+                accepted += 1
+                per["reinvite"]["skipped"] += 1
+                emitted += 1
+                yield {
+                    "type": "progress", "current": emitted, "total": total,
+                    "franchisee": "reinvite", "user": email,
+                    "status": "accepted",
+                    "reason": "Invite already accepted - no action needed",
+                }
+            else:
+                members += 1
+                per["reinvite"]["skipped"] += 1
+                emitted += 1
+                yield {
+                    "type": "progress", "current": emitted, "total": total,
+                    "franchisee": "reinvite", "user": email,
+                    "status": "in_tenant_member",
+                    "reason": (
+                        f"In tenant as {user.user_type or 'Member'} - "
+                        "no invite state to resend"
+                    ),
+                }
+
+        # 3. Re-send invitations for the pending set.
+        if to_resend:
+            invitations = [
+                {
+                    "email": em,
+                    "display_name": dn,
+                    "redirect_url": invite_redirect_url,
+                    "send_invitation_message": True,
+                }
+                for em, dn in to_resend
+            ]
+            try:
+                results = client.batch_invite_guests(invitations)
+            except GraphError as exc:
+                results = {em: (None, exc.message) for em, _ in to_resend}
+            for email, (uid, err) in results.items():
+                emitted += 1
+                if uid:
+                    resent += 1
+                    per["reinvite"]["invited"] += 1
+                    yield {
+                        "type": "progress", "current": emitted, "total": total,
+                        "franchisee": "reinvite", "user": email,
+                        "status": "invited",
+                        "reason": "Pending - invitation re-sent",
+                    }
+                else:
+                    per["reinvite"]["failed"] += 1
+                    failures.append({
+                        "user": email, "email": email,
+                        "reason": err or "resend failed", "action": "resend",
+                    })
+                    yield {
+                        "type": "progress", "current": emitted, "total": total,
+                        "franchisee": "reinvite", "user": email,
+                        "status": "failed",
+                        "reason": f"Resend failed: {err or 'unknown error'}",
+                    }
+
+    yield {
+        "type": "done",
+        "summary": {
+            "total": total,
+            "succeeded": resent,
+            "invited": resent,
+            "accepted": accepted,
+            "in_tenant_member": members,
+            "not_found": not_found,
+            "failed": len(failures),
+            "failures": failures,
+            "per_franchisee": per,
+        },
+    }
+
+
 def iter_bulk_offboard(
     client: GraphClient,
     emails: Iterable[str],

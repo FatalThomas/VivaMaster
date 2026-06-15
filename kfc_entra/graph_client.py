@@ -46,6 +46,10 @@ class GraphUser:
     user_type: str | None
     account_enabled: bool
     created_date_time: str | None
+    # B2B invite tracking: "PendingAcceptance" | "Accepted" | None (for
+    # non-Guest accounts). Used by the Re-invites flow to spot stale
+    # invitations that need re-sending.
+    external_user_state: str | None = None
 
     @classmethod
     def from_api(cls, data: dict) -> "GraphUser":
@@ -57,6 +61,7 @@ class GraphUser:
             user_type=data.get("userType"),
             account_enabled=bool(data.get("accountEnabled", True)),
             created_date_time=data.get("createdDateTime"),
+            external_user_state=data.get("externalUserState"),
         )
 
 
@@ -256,7 +261,7 @@ class GraphClient:
             raise ValueError("Microsoft Graph $batch is limited to 20 requests.")
 
         from urllib.parse import quote
-        select = "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime"
+        select = "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime,externalUserState"
         requests_body = []
         for idx, email in enumerate(emails):
             safe = email.replace("'", "''")

@@ -40,6 +40,7 @@ from .bulk import (
     iter_convert_to_member,
     iter_cross_reference,
     iter_invite_missing,
+    iter_resend_pending_invites,
     parse_offboard_emails,
 )
 from .graph_client import GraphClient, GraphError
@@ -1682,6 +1683,132 @@ def offboard_apply_stream():
     return _sse_response(
         iter_bulk_offboard(client, emails, disable_accounts=disable_accounts)
     )
+
+
+# ============================================================================
+# Re-invites - upload CSV of emails the user believes were already invited;
+# look each one up, find those still in PendingAcceptance, re-send Microsoft's
+# invitation email. Mirrors the PowerShell "ResendInvitations.ps1" workflow.
+# ============================================================================
+
+# Same in-memory + on-disk stash pattern as offboards.
+_REINVITE_STORE: OrderedDict[str, list[str]] = OrderedDict()
+_REINVITE_STORE_MAX = 5
+
+
+def _reinvite_dir():
+    from .mappings import config_dir
+    d = config_dir() / "reinvites"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _stash_reinvite(emails: list[str]) -> str:
+    token = uuid.uuid4().hex
+    _REINVITE_STORE[token] = list(emails)
+    while len(_REINVITE_STORE) > _REINVITE_STORE_MAX:
+        _REINVITE_STORE.popitem(last=False)
+    try:
+        with open(_reinvite_dir() / f"{token}.json", "w", encoding="utf-8") as fh:
+            json.dump(emails, fh)
+    except OSError:
+        pass
+    return token
+
+
+def _load_reinvite(token: str) -> list[str] | None:
+    raw = _REINVITE_STORE.get(token or "")
+    if raw is None and token:
+        try:
+            with open(_reinvite_dir() / f"{token}.json", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            _REINVITE_STORE[token] = raw
+        except (OSError, ValueError):
+            raw = None
+    return raw
+
+
+@main_bp.route("/reinvites")
+@login_required
+def reinvites_upload_page():
+    return render_template("reinvites_upload.html", user=current_user())
+
+
+@main_bp.route("/reinvites/upload", methods=["POST"])
+@login_required
+def reinvites_upload():
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Pick a CSV / TSV / XLSX file containing email addresses.", "error")
+        return redirect(url_for("main.reinvites_upload_page"))
+    content = file.read()
+    try:
+        emails = parse_offboard_emails(content, file.filename)
+    except Exception as exc:  # noqa: BLE001 - parser raised
+        flash(f"Couldn't read that file: {exc}", "error")
+        return redirect(url_for("main.reinvites_upload_page"))
+    if not emails:
+        flash("No email addresses found in that file.", "warning")
+        return redirect(url_for("main.reinvites_upload_page"))
+    token = _stash_reinvite(emails)
+    return redirect(url_for("main.reinvites_preview", upload_id=token))
+
+
+@main_bp.route("/reinvites/preview/<upload_id>")
+@login_required
+def reinvites_preview(upload_id: str):
+    emails = _load_reinvite(upload_id)
+    if emails is None:
+        flash("Upload expired or not found - please re-upload.", "error")
+        return redirect(url_for("main.reinvites_upload_page"))
+    return render_template(
+        "reinvites_preview.html",
+        user=current_user(),
+        upload_id=upload_id,
+        emails=emails,
+        total=len(emails),
+    )
+
+
+@main_bp.route("/reinvites/apply/stream", methods=["POST"])
+@login_required
+def reinvites_apply_stream():
+    """Kick off a Job that checks each email's invitation state and
+    re-sends Microsoft's invitation to the PendingAcceptance ones.
+
+    Returns JSON {job_id, stream_url} so the bulk-panel + dock light up
+    like every other managed apply.
+    """
+    payload = request.get_json(silent=True) or {}
+    upload_id = payload.get("upload_id") or ""
+    emails = _load_reinvite(upload_id)
+    if emails is None:
+        return jsonify(error="Upload expired or not found - please re-upload."), 404
+
+    client = GraphClient(get_access_token())
+    cfg = current_app.config["KFC_CONFIG"]
+    invite_redirect_url = cfg.invite_redirect_url
+
+    label = f"Re-send pending invitations ({len(emails)})"
+    started_from = request.referrer or url_for(
+        "main.reinvites_preview", upload_id=upload_id
+    )
+
+    def factory(job):
+        def gen():
+            for ev in iter_resend_pending_invites(
+                client, emails,
+                invite_redirect_url=invite_redirect_url,
+            ):
+                if job.cancel_requested:
+                    return
+                yield ev
+        return gen()
+
+    job = job_registry.start("reinvites", label, started_from, factory)
+    return jsonify(job_id=job.id, stream_url=url_for(
+        "main.job_stream", job_id=job.id
+    ))
 
 
 def _display_name_from_email(email: str) -> str:

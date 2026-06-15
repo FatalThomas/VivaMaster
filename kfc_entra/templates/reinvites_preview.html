@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Re-invites preview - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Re-invite preview</h1>
+    <a class="btn btn-secondary" href="{{ url_for('main.reinvites_upload_page') }}">Upload a different file</a>
+  </div>
+  <p class="muted">
+    Found <b>{{ total }}</b> unique email(s) in the upload. Applying will
+    look each one up in the tenant; users in <b>PendingAcceptance</b>
+    get a fresh Microsoft invitation, everyone else is left alone. The
+    log records every outcome:
+  </p>
+  <ul class="muted" style="margin: 0 0 12px 18px; line-height: 1.6;">
+    <li><b>invited</b> &mdash; was pending, invitation just re-sent</li>
+    <li><b>accepted</b> &mdash; already redeemed; no action needed</li>
+    <li><b>in_tenant_member</b> &mdash; in the tenant as a Member account; nothing to resend</li>
+    <li><b>not_found</b> &mdash; not in the tenant at all; the assumption was wrong</li>
+    <li><b>failed</b> &mdash; Graph rejected the resend (log line has the reason)</li>
+  </ul>
+
+  <div class="report-toolbar">
+    <button type="button" class="btn btn-primary" id="apply-btn">
+      Check &amp; re-send for {{ total }} email(s)
+    </button>
+  </div>
+
+  <div class="bulk-panel" id="reinvite-panel" hidden></div>
+
+  <details class="offboard-list-details">
+    <summary class="muted">Show the email list ({{ total }})</summary>
+    <ol class="offboard-emails mono">
+      {% for email in emails %}<li>{{ email }}</li>{% endfor %}
+    </ol>
+  </details>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var applyBtn = document.getElementById("apply-btn");
+  var panel = document.getElementById("reinvite-panel");
+  var UPLOAD_ID = {{ upload_id | tojson }};
+  var TOTAL = {{ total }};
+
+  applyBtn.addEventListener("click", function () {
+    kfcConfirm({
+      title: "Re-send pending invitations for " + TOTAL + " email(s)?",
+      bodyHtml:
+        "Each email is looked up in the tenant. Only users whose " +
+        "invitation state is <b>PendingAcceptance</b> get a fresh " +
+        "Microsoft invitation. Accepted, Member, and not-found users " +
+        "are skipped (still shown in the log).",
+      confirmLabel: "Check &amp; re-send",
+    }).then(function (ok) {
+      if (!ok) return;
+      kfcBusy(applyBtn, true);
+      kfcRunBulk({
+        url: {{ url_for('main.reinvites_apply_stream') | tojson }},
+        method: "POST",
+        body: { upload_id: UPLOAD_ID },
+        panel: panel,
+        verb: "Checking",
+        failuresCsvName: "reinvite-failures.csv",
+        onDone: function () { kfcBusy(applyBtn, false); },
+      });
+    });
+  });
+})();
+</script>
+{% endblock %}

@@ -262,6 +262,12 @@
           logLine("line-ok", "✓ " + ev.user);
         } else if (ev.status === "invited") {
           logLine("line-ok", "✉ " + ev.user, ev.reason || "Guest invitation sent");
+        } else if (ev.status === "accepted") {
+          logLine("line-skip", "✓ " + ev.user, ev.reason || "Invite already accepted");
+        } else if (ev.status === "in_tenant_member") {
+          logLine("line-skip", "● " + ev.user, ev.reason || "In tenant as Member");
+        } else if (ev.status === "not_found") {
+          logLine("line-skip", "? " + ev.user, ev.reason || "Not in tenant");
         } else if (ev.status === "already_member") {
           logLine("line-skip", "✓ " + ev.user, "already in the group");
         } else if (ev.status === "removed") {
@@ -315,6 +321,12 @@
         '<div class="stat stat-ok"><b>' + ok + '</b><span>added</span></div>' +
         (summary.invited
           ? '<div class="stat stat-ok"><b>' + summary.invited + '</b><span>invited</span></div>' : "") +
+        (summary.accepted
+          ? '<div class="stat stat-skip"><b>' + summary.accepted + '</b><span>already accepted</span></div>' : "") +
+        (summary.in_tenant_member
+          ? '<div class="stat stat-skip"><b>' + summary.in_tenant_member + '</b><span>in tenant</span></div>' : "") +
+        (summary.not_found
+          ? '<div class="stat stat-skip"><b>' + summary.not_found + '</b><span>not found</span></div>' : "") +
         (summary.already_member !== undefined
           ? '<div class="stat stat-skip"><b>' + summary.already_member + '</b><span>already member</span></div>' : "") +
         (summary.owner_added
