@@ -7,28 +7,41 @@
     <a class="btn btn-secondary" href="{{ url_for('main.dashboard') }}">Cancel</a>
   </div>
 
+  <h2>Scan the tenant</h2>
   <p class="muted">
-    Upload a CSV / TSV / XLSX with an <b>email</b> column. For each one
-    the app looks the user up in the tenant and, if their B2B invitation
-    state is still <b>PendingAcceptance</b>, asks Microsoft to send a
-    fresh invitation email. Already-accepted users and existing Members
-    are left alone; emails that aren&rsquo;t in the tenant at all are
-    flagged so you can spot any wrong assumptions in your list.
+    Find every user in Entra whose B2B invitation is still
+    <b>PendingAcceptance</b> and re-send Microsoft&rsquo;s invitation
+    email to each one. No CSV needed &mdash; Graph filters the directory
+    for us.
+  </p>
+  <div class="actions" style="margin-bottom: 8px;">
+    <button type="button" class="btn btn-primary" id="scan-btn">
+      &#9993; Scan &amp; re-send all pending
+    </button>
+  </div>
+  <div class="bulk-panel" id="scan-panel" hidden></div>
+
+  <hr style="margin: 28px 0;">
+
+  <h2>Or check a specific list</h2>
+  <p class="muted">
+    Upload a CSV / TSV / XLSX with an <b>email</b> column. Same logic
+    but limited to the users on your list &mdash; useful when you only
+    want to nudge a specific group of stuck invitations.
   </p>
 
   <form method="post" action="{{ url_for('main.reinvites_upload') }}"
         enctype="multipart/form-data" class="upload-form">
     <label class="upload-zone" id="upload-zone">
       <input type="file" name="file" accept=".csv,.tsv,.xls,.xlsx,.xlsm" required hidden>
-      <div class="upload-art">&#9993;</div>
+      <div class="upload-art">&#128196;</div>
       <div class="upload-prompt"><b>Drag &amp; drop</b> a file, or <span class="link">browse</span></div>
       <div class="upload-hint muted">.csv &middot; .tsv &middot; .xls &middot; .xlsx</div>
       <div class="upload-filename muted"></div>
     </label>
 
     <div class="actions">
-      <button type="submit" class="btn btn-primary">Parse &amp; preview</button>
-      <a class="btn btn-secondary" href="{{ url_for('main.dashboard') }}">Cancel</a>
+      <button type="submit" class="btn btn-secondary">Parse &amp; preview</button>
     </div>
   </form>
 </section>
@@ -37,6 +50,35 @@
 {% block scripts %}
 <script>
 (function () {
+  // Tenant scan - no upload required.
+  var scanBtn = document.getElementById("scan-btn");
+  var scanPanel = document.getElementById("scan-panel");
+  scanBtn.addEventListener("click", function () {
+    kfcConfirm({
+      title: "Scan tenant &amp; re-send all pending invitations?",
+      bodyHtml:
+        "Graph will list every user with " +
+        "<code>externalUserState=PendingAcceptance</code>. Each one " +
+        "gets a fresh Microsoft invitation email. Already-accepted " +
+        "users and Members are untouched. This can take a few minutes " +
+        "if the directory is large.",
+      confirmLabel: "Scan &amp; re-send",
+    }).then(function (ok) {
+      if (!ok) return;
+      kfcBusy(scanBtn, true);
+      kfcRunBulk({
+        url: {{ url_for('main.reinvites_scan_stream') | tojson }},
+        method: "POST",
+        body: {},
+        panel: scanPanel,
+        verb: "Resending",
+        failuresCsvName: "reinvite-scan-failures.csv",
+        onDone: function () { kfcBusy(scanBtn, false); },
+      });
+    });
+  });
+
+  // Drag-and-drop upload (CSV path).
   var zone = document.getElementById("upload-zone");
   var input = zone.querySelector('input[type=file]');
   var name = zone.querySelector(".upload-filename");

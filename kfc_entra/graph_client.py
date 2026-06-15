@@ -1,7 +1,7 @@
 """Thin wrapper around the Microsoft Graph REST API for user operations."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import requests
@@ -50,6 +50,10 @@ class GraphUser:
     # non-Guest accounts). Used by the Re-invites flow to spot stale
     # invitations that need re-sending.
     external_user_state: str | None = None
+    # Secondary email addresses on the user object. For B2B Guests the
+    # original invitedUserEmailAddress is usually here, even when the
+    # primary `mail` field is empty.
+    other_mails: list[str] = field(default_factory=list)
 
     @classmethod
     def from_api(cls, data: dict) -> "GraphUser":
@@ -62,6 +66,7 @@ class GraphUser:
             account_enabled=bool(data.get("accountEnabled", True)),
             created_date_time=data.get("createdDateTime"),
             external_user_state=data.get("externalUserState"),
+            other_mails=list(data.get("otherMails") or []),
         )
 
 
@@ -303,6 +308,47 @@ class GraphClient:
         for email in emails:
             results.setdefault(email, None)
         return results
+
+    def list_pending_acceptance_users(self) -> list[GraphUser]:
+        """Return every tenant user whose B2B invitation is still pending.
+
+        Paginates ``/users?$filter=externalUserState eq 'PendingAcceptance'``
+        with the advanced-query headers (ConsistencyLevel: eventual +
+        $count=true) so the filter is accepted by Graph. Used by the
+        Re-invites page's "scan tenant" path - no CSV upload required.
+        """
+        from urllib.parse import urlencode
+
+        select = (
+            "id,displayName,userPrincipalName,mail,otherMails,"
+            "userType,accountEnabled,createdDateTime,externalUserState"
+        )
+        params = {
+            "$filter": "externalUserState eq 'PendingAcceptance'",
+            "$select": select,
+            "$count": "true",
+            "$top": "100",
+        }
+        headers = dict(self._headers)
+        headers["ConsistencyLevel"] = "eventual"
+
+        url = f"{GRAPH_BASE}/users?{urlencode(params)}"
+        out: list[GraphUser] = []
+        while url:
+            resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+            if resp.status_code >= 400:
+                try:
+                    payload = resp.json()
+                    message = payload.get("error", {}).get("message", resp.text)
+                except ValueError:
+                    payload = None
+                    message = resp.text
+                raise GraphError(resp.status_code, message, payload)
+            data = resp.json()
+            for u in data.get("value", []):
+                out.append(GraphUser.from_api(u))
+            url = data.get("@odata.nextLink")
+        return out
 
     def batch_invite_guests(
         self,

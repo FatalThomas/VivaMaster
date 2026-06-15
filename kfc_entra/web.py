@@ -40,6 +40,7 @@ from .bulk import (
     iter_convert_to_member,
     iter_cross_reference,
     iter_invite_missing,
+    iter_resend_all_pending,
     iter_resend_pending_invites,
     parse_offboard_emails,
 )
@@ -1806,6 +1807,35 @@ def reinvites_apply_stream():
         return gen()
 
     job = job_registry.start("reinvites", label, started_from, factory)
+    return jsonify(job_id=job.id, stream_url=url_for(
+        "main.job_stream", job_id=job.id
+    ))
+
+
+@main_bp.route("/reinvites/scan/stream", methods=["POST"])
+@login_required
+def reinvites_scan_stream():
+    """Tenant-wide scan: find every PendingAcceptance Guest and resend
+    their invitation. No CSV upload required - the Graph filter does
+    the work."""
+    client = GraphClient(get_access_token())
+    cfg = current_app.config["KFC_CONFIG"]
+    invite_redirect_url = cfg.invite_redirect_url
+
+    label = "Re-send all pending tenant invitations"
+    started_from = request.referrer or url_for("main.reinvites_upload_page")
+
+    def factory(job):
+        def gen():
+            for ev in iter_resend_all_pending(
+                client, invite_redirect_url=invite_redirect_url,
+            ):
+                if job.cancel_requested:
+                    return
+                yield ev
+        return gen()
+
+    job = job_registry.start("reinvites_scan", label, started_from, factory)
     return jsonify(job_id=job.id, stream_url=url_for(
         "main.job_stream", job_id=job.id
     ))
