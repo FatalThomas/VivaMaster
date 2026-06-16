@@ -159,6 +159,10 @@ def _fetch_trial_config(server_url: str) -> dict | None:
     return {
         "enabled": bool(data.get("enabled", True)),
         "ends_at": data.get("ends_at") or "",
+        # Stripe Payment Link (or any URL) the "Buy a license" button on
+        # the desktop app should point at. Empty string = fall back to
+        # the LICENSE_BUY_URL env var / config.py default.
+        "buy_url": (data.get("buy_url") or "").strip(),
         "fetched_at": _iso(_now()),
     }
 
@@ -323,13 +327,17 @@ def current_entitlement(
     key = (data.get("key") or "").strip()
     first_launch = data.get("first_launch_at") or _iso(_now())
 
-    # No key entered -> trial only. Trial behaviour is admin-controlled
-    # via /trial-config on the licence server (enable / disable, global
-    # end-date). Caches for 30 minutes inside license.json so opening
-    # 20 pages in a row doesn't fire 20 HTTP requests.
+    # Pick up the admin-controlled trial config (enable flag + global
+    # end-date + Stripe payment link) once per probe. Remote buy_url
+    # wins over the config.py default so the storefront URL can be
+    # changed without re-shipping the exe.
+    trial_cfg = _cached_trial_config(data, server_url)
+    if trial_cfg.get("buy_url"):
+        buy_url = trial_cfg["buy_url"]
+
+    # No key entered -> trial only.
     if not key:
-        cfg = _cached_trial_config(data, server_url)
-        return _trial_state(first_launch, buy_url, trial_config=cfg)
+        return _trial_state(first_launch, buy_url, trial_config=trial_cfg)
 
     # We have a key. Use the cached verdict if recent and force_recheck
     # is False - skips a Graph round-trip on every page load.
@@ -361,7 +369,7 @@ def current_entitlement(
     # No server URL set: we can't validate. Treat as unlicensed but allow
     # the trial path if it's still active.
     if not server_url:
-        trial = _trial_state(first_launch, buy_url, trial_config=data.get("trial_config"))
+        trial = _trial_state(first_launch, buy_url, trial_config=trial_cfg)
         if trial.can_use:
             trial.message = (
                 "License server not configured (LICENSE_SERVER_URL). "

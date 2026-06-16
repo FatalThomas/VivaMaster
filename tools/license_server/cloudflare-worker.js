@@ -275,7 +275,11 @@ const CONFIG_KEY_TRIAL = CONFIG_PREFIX + "trial";
 
 async function getTrialConfig(env) {
   const raw = await env.LICENSE_KEYS.get(CONFIG_KEY_TRIAL);
-  let cfg = { enabled: true, ends_at: "", updated_at: "" };
+  // buy_url is the Stripe Payment Link the desktop app's "Buy a
+  // license" button sends customers to. Lives on the same config row
+  // as the trial banner because both are admin-controlled and both
+  // need to ship to every install on the next poll.
+  let cfg = { enabled: true, ends_at: "", buy_url: "", updated_at: "" };
   if (raw) {
     try { Object.assign(cfg, JSON.parse(raw)); } catch (e) { /* keep defaults */ }
   }
@@ -290,6 +294,7 @@ async function setTrialConfig(request, env) {
   const cfg = {
     enabled: Boolean(body.enabled),
     ends_at: body.ends_at || "",
+    buy_url: (body.buy_url || "").trim(),
     updated_at: isoNow(),
   };
   await env.LICENSE_KEYS.put(CONFIG_KEY_TRIAL, JSON.stringify(cfg));
@@ -799,6 +804,13 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
       </label>
     </div>
     <div class="settings-row">
+      <label class="field-inline" style="flex: 1; min-width: 320px;">
+        <span>Stripe payment link</span>
+        <input type="url" id="buy-url" placeholder="https://buy.stripe.com/..." style="flex: 1; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; min-width: 280px;">
+        <small> &mdash; the &ldquo;Buy a license&rdquo; button on every install sends customers here</small>
+      </label>
+    </div>
+    <div class="settings-row">
       <button class="btn btn-primary" id="trial-save">Save banner settings</button>
       <span class="muted small" id="trial-status">&nbsp;</span>
     </div>
@@ -1126,6 +1138,7 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
       const r = await fetchJson('/admin/api/trial');
       $('#trial-enabled').checked = !!r.enabled;
       $('#trial-ends-at').value = r.ends_at ? r.ends_at.slice(0, 10) : '';
+      $('#buy-url').value = r.buy_url || '';
       if (r.updated_at) {
         $('#trial-status').textContent = 'Last saved ' + fmtDateTime(r.updated_at);
       } else {
@@ -1142,6 +1155,7 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
       ends_at: ends
         ? (new Date(ends + 'T23:59:00Z')).toISOString().replace(/\\.\\d{3}Z$/, '+00:00')
         : '',
+      buy_url: $('#buy-url').value.trim(),
     };
     $('#trial-save').disabled = true;
     try {
