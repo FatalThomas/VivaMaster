@@ -1,0 +1,16 @@
+{
+  "KFC-DEMO-AAAA-BBBB": {
+    "tenant_id": "*",
+    "expires_at": "2027-12-31T00:00:00+00:00",
+    "edition": "pro",
+    "revoked": false,
+    "note": "Demo key - any tenant, valid through 2027"
+  },
+  "KFC-YUMAU-0001-PROD": {
+    "tenant_id": "a48b58d3-4ae6-4310-bd85-016f3555e958",
+    "expires_at": "2027-06-15T00:00:00+00:00",
+    "edition": "pro",
+    "revoked": false,
+    "note": "Yum! Australia"
+  }
+}

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}License - KFC Entra User Manager{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>License required</h1>
+  </div>
+
+  {% if license_state %}
+    {% if license_state.state == 'trial' %}
+      <div class="flash flash-success">
+        Free trial active &middot; <b>{{ license_state.days_remaining }} day(s) remaining</b>
+        (until <span class="mono">{{ license_state.expires_at }}</span>).
+      </div>
+    {% elif license_state.state == 'licensed' %}
+      <div class="flash flash-success">
+        Licensed ({{ license_state.edition or 'pro' }}) &middot; valid until
+        <span class="mono">{{ license_state.expires_at }}</span>.
+      </div>
+    {% elif license_state.state == 'server_unreachable' %}
+      <div class="flash flash-warning">
+        <b>License server unreachable.</b> {{ license_state.message }}
+      </div>
+    {% elif license_state.state == 'expired' %}
+      <div class="flash flash-error">
+        <b>Your free trial has ended.</b> Enter a license key to keep using the app.
+      </div>
+    {% elif license_state.state == 'invalid' %}
+      <div class="flash flash-error">
+        <b>License key rejected.</b> {{ license_state.message }}
+      </div>
+    {% else %}
+      <div class="flash flash-warning">
+        {{ license_state.message or 'No license configured.' }}
+      </div>
+    {% endif %}
+  {% endif %}
+
+  {% if not license_server_set %}
+    <div class="flash flash-warning">
+      <b>No license server is configured</b> (the
+      <code>LICENSE_SERVER_URL</code> env var is empty). The trial still
+      works, but pasted keys can&rsquo;t be validated until a server is
+      set. See <code>tools/license_server/server.py</code> for a
+      reference implementation.
+    </div>
+  {% endif %}
+
+  <h2>Enter a license key</h2>
+  <p class="muted">
+    Paste the key from your purchase confirmation. The app calls the
+    license server to validate it; once it&rsquo;s accepted the verdict
+    is cached for 24 hours so it doesn&rsquo;t re-check on every page load.
+  </p>
+  <form method="post" action="{{ url_for('main.license_save') }}" class="settings-form">
+    <label class="field">
+      <span>License key</span>
+      <input type="text" name="key" autocomplete="off"
+             placeholder="paste here"
+             value="{{ license_state.key if license_state and license_state.key else '' }}">
+    </label>
+    <div class="settings-actions">
+      <button type="submit" class="btn btn-primary">Save &amp; verify</button>
+      {% if license_state and license_state.key %}
+        <button type="submit" class="btn btn-secondary"
+                formaction="{{ url_for('main.license_check') }}">Re-check now</button>
+        <button type="submit" class="btn btn-secondary"
+                formaction="{{ url_for('main.license_clear') }}"
+                onclick="return confirm('Clear the stored license key?');">Clear key</button>
+      {% endif %}
+    </div>
+  </form>
+
+  <h2 style="margin-top: 28px;">Don&rsquo;t have a key?</h2>
+  <p class="muted">
+    Pick up a license to keep using the app once your free trial ends.
+  </p>
+  {% if license_state and license_state.buy_url %}
+    <a class="btn btn-primary" target="_blank" rel="noopener"
+       href="{{ license_state.buy_url }}">&rarr; Buy a license</a>
+  {% endif %}
+</section>
+{% endblock %}

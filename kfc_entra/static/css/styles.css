@@ -166,6 +166,17 @@ a:hover { text-decoration: underline; }
 
 .actions { display: flex; gap: 12px; margin-top: 4px; }
 
+/* ---------- trial-countdown banner ---------- */
+.trial-banner {
+  background: #fff6cc;
+  border-bottom: 1px solid #d6b54a;
+  color: #5b4500;
+  padding: 8px 18px;
+  font-size: 13px;
+  text-align: center;
+}
+.trial-banner a { color: #5b4500; text-decoration: underline; }
+
 /* ---------- active-actions dock ---------- */
 #kfc-dock {
   position: fixed;

@@ -33,6 +33,17 @@
   </div>
 </header>
 
+{% if license_state and license_state.state == 'trial' %}
+<div class="trial-banner">
+  Free trial &middot; <b>{{ license_state.days_remaining }} day(s) remaining</b>.
+  <a href="{{ url_for('main.license_page') }}">Enter a license key</a>
+  {% if license_state.buy_url %}
+    or <a target="_blank" rel="noopener" href="{{ license_state.buy_url }}">buy a license</a>
+  {% endif %}
+  to keep using the app after the trial ends.
+</div>
+{% endif %}
+
 {% if available_update %}
 <div class="update-banner" id="update-banner"
      data-version="{{ available_update.latest_version }}" hidden>

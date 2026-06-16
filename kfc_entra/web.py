@@ -34,6 +34,7 @@ from .auth import (
     poll_device_flow,
     start_device_flow,
 )
+from . import licensing
 from .bulk import (
     iter_apply_mappings,
     iter_bulk_offboard,
@@ -1849,6 +1850,92 @@ def _display_name_from_email(email: str) -> str:
     return " ".join(p.capitalize() for p in parts) if parts else email
 
 
+# ============================================================================
+# Paywall - 14-day free trial, then a server-validated license key. Anything
+# but a "trial" or "licensed" state blocks the app at sign-in (Settings,
+# /license and /license/* are the only routes that stay reachable so the user
+# can still paste a key or read the buy link).
+# ============================================================================
+
+# Endpoints that stay reachable when the app is locked.
+_LICENSE_OPEN_ENDPOINTS = frozenset(
+    {
+        "main.license_page",
+        "main.license_save",
+        "main.license_check",
+        "main.license_clear",
+        "main.install_update",
+        "static",
+    }
+)
+
+
+def _current_license_state():
+    cfg = current_app.config["KFC_CONFIG"]
+    return licensing.current_entitlement(
+        server_url=cfg.license_server_url,
+        tenant_id=cfg.tenant_id,
+        app_version=__version__,
+        buy_url=cfg.license_buy_url,
+    )
+
+
+@main_bp.route("/license", methods=["GET"])
+def license_page():
+    state = _current_license_state()
+    return render_template(
+        "license_required.html",
+        user=current_user(),
+        license_state=state,
+        license_server_set=bool(current_app.config["KFC_CONFIG"].license_server_url),
+    )
+
+
+@main_bp.route("/license", methods=["POST"])
+def license_save():
+    key = (request.form.get("key") or "").strip()
+    if not key:
+        flash("Paste your license key first.", "error")
+        return redirect(url_for("main.license_page"))
+    licensing.save_state({"key": key, "last_check_at": "", "expires_at": ""})
+    # Force a fresh server check so the user sees the verdict immediately.
+    cfg = current_app.config["KFC_CONFIG"]
+    state = licensing.current_entitlement(
+        server_url=cfg.license_server_url,
+        tenant_id=cfg.tenant_id,
+        app_version=__version__,
+        buy_url=cfg.license_buy_url,
+        force_recheck=True,
+    )
+    if state.can_use:
+        flash(state.message or "License accepted.", "success")
+        return redirect(url_for("main.landing"))
+    flash(state.message or "License rejected.", "error")
+    return redirect(url_for("main.license_page"))
+
+
+@main_bp.route("/license/check", methods=["POST"])
+def license_check():
+    """Manual 're-check now' button on the license page / Settings."""
+    cfg = current_app.config["KFC_CONFIG"]
+    state = licensing.current_entitlement(
+        server_url=cfg.license_server_url,
+        tenant_id=cfg.tenant_id,
+        app_version=__version__,
+        buy_url=cfg.license_buy_url,
+        force_recheck=True,
+    )
+    flash(state.message or state.state, "success" if state.can_use else "warning")
+    return redirect(url_for("main.license_page"))
+
+
+@main_bp.route("/license/clear", methods=["POST"])
+def license_clear():
+    licensing.clear_key()
+    flash("License key cleared.", "success")
+    return redirect(url_for("main.license_page"))
+
+
 def create_app() -> Flask:
     cfg = load_config()
     app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -1867,13 +1954,42 @@ def create_app() -> Flask:
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
 
+    @app.before_request
+    def _enforce_license():
+        # The Flask static handler + a small allow-list of license-self-
+        # service endpoints stay reachable so a locked install can still
+        # paste a key. Everything else gets redirected (or JSON-401'd for
+        # AJAX) to the license page.
+        from .auth import _wants_json
+        ep = request.endpoint or ""
+        if ep in _LICENSE_OPEN_ENDPOINTS:
+            return None
+        state = _current_license_state()
+        if state.can_use:
+            return None
+        if _wants_json():
+            return jsonify(
+                error=state.message or "License required.",
+                license_state=state.state,
+                buy_url=state.buy_url,
+            ), 402
+        return redirect(url_for("main.license_page"))
+
     @app.context_processor
     def inject_user():
+        # Pull license state into every template so the base layout can
+        # show a "Trial - 3 days remaining" banner.
+        state = None
+        try:
+            state = _current_license_state()
+        except Exception:  # noqa: BLE001 - never block render on license probe
+            pass
         return {
             "current_user": current_user(),
             "app_version": __version__,
             "available_update": get_available_update(),
             "self_install_supported": self_install_supported(),
+            "license_state": state,
         }
 
     return app

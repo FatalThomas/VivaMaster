@@ -33,6 +33,13 @@ class Config:
     flask_secret_key: str
     invite_redirect_url: str
     port: int
+    # URL of the small license server the app POSTs ``/verify`` to on
+    # launch. Unset => trial-only, no key can be validated. See
+    # tools/license_server/server.py for a deployable reference.
+    license_server_url: str = ""
+    # Storefront link the "Buy a license" button on the gating page
+    # points at (Gumroad / Stripe / etc).
+    license_buy_url: str = ""
 
     @property
     def authority(self) -> str:
@@ -93,4 +100,8 @@ def load_config() -> Config:
             "INVITE_REDIRECT_URL", "https://myapps.microsoft.com"
         ),
         port=int(os.environ.get("PORT", "5000")),
+        license_server_url=os.environ.get("LICENSE_SERVER_URL", "").strip(),
+        license_buy_url=os.environ.get(
+            "LICENSE_BUY_URL", "https://example.com/buy-kfc-entra-manager"
+        ),
     )
