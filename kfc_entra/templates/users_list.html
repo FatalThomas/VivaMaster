@@ -349,8 +349,23 @@
       if (loadedFor[userId]) return;
       panel.innerHTML = '<span class="spinner spinner-sm"></span> Loading groups&hellip;';
       fetch("/users/" + encodeURIComponent(userId) + "/groups",
-            { credentials: "same-origin" })
-        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+            { credentials: "same-origin", headers: { "Accept": "application/json" } })
+        .then(function (r) {
+          // Tolerate HTML responses (session expiry redirects to the
+          // login page) by reading text + trying to parse as JSON;
+          // surface a friendly message when it isn't.
+          return r.text().then(function (txt) {
+            var data;
+            try { data = JSON.parse(txt); }
+            catch (e) {
+              if (r.status === 401 || /login/i.test(txt.slice(0, 200))) {
+                throw new Error("Session expired - reload the page and sign in.");
+              }
+              throw new Error("Server returned HTTP " + r.status + " (not JSON).");
+            }
+            return { ok: r.ok, data: data };
+          });
+        })
         .then(function (res) {
           if (!res.ok) throw new Error(res.data.error || "Failed to load groups.");
           loadedFor[userId] = true;

@@ -609,6 +609,8 @@ def user_groups_json(user_id: str):
         groups = client.list_user_groups(user_id)
     except GraphError as exc:
         return jsonify({"error": exc.message}), 502
+    except Exception as exc:  # noqa: BLE001 - keep response JSON-shaped
+        return jsonify({"error": str(exc) or "Unexpected server error."}), 500
     return jsonify({
         "groups": sorted(
             [{"id": g.id, "name": g.display_name} for g in groups],

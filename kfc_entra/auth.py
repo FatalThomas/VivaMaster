@@ -300,10 +300,31 @@ def clear_session() -> None:
             _PENDING.pop(flow_id, None)
 
 
+def _wants_json() -> bool:
+    """True for AJAX / SSE / JSON requests that should NOT receive a
+    login-page HTML redirect when the session expires."""
+    accept = (request.headers.get("Accept") or "").lower()
+    if "application/json" in accept or "text/event-stream" in accept:
+        return True
+    if (request.headers.get("X-Requested-With") or "").lower() == "xmlhttprequest":
+        return True
+    if (request.headers.get("Content-Type") or "").lower().startswith("application/json"):
+        return True
+    return False
+
+
 def login_required(view: Callable) -> Callable:
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not current_user() or not get_access_token():
+            # AJAX endpoints should get a JSON 401 so the client can show
+            # a sensible "Session expired - sign in again" message rather
+            # than try to parse the login page's HTML as JSON.
+            if _wants_json():
+                from flask import jsonify
+                return jsonify(
+                    error="Session expired. Refresh the page and sign in again.",
+                ), 401
             session["post_login_redirect"] = request.url
             return redirect(url_for("auth.login"))
         return view(*args, **kwargs)
