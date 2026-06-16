@@ -1,0 +1,17 @@
+name = "kfc-licenses"
+main = "cloudflare-worker.js"
+compatibility_date = "2025-01-01"
+
+# Bound at runtime as `env.LICENSE_KEYS`. Create it with:
+#   wrangler kv namespace create LICENSE_KEYS
+# then paste the printed `id` value below (Cloudflare will print
+# something like { binding = "LICENSE_KEYS", id = "abc123..." }).
+[[kv_namespaces]]
+binding = "LICENSE_KEYS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Optional - set if you want to use the /admin/issue endpoint (e.g. from
+# a Stripe / Gumroad webhook). Set with:
+#   wrangler secret put ADMIN_TOKEN
+# It then lives on Cloudflare's side as a secret env var; the worker
+# reads it via env.ADMIN_TOKEN.
