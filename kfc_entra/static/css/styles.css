@@ -1032,3 +1032,161 @@ a:hover { text-decoration: underline; }
 }
 .xref-row .btn { flex: 0 0 auto; }
 .xref-row .muted { flex: 1; line-height: 1.5; }
+
+/* ---------- license page ---------- */
+.license-hero {
+  border-radius: 14px;
+  padding: 28px 32px;
+  margin-bottom: 20px;
+  border: 1px solid var(--line);
+  background: white;
+}
+.license-hero h1 { margin: 10px 0 8px; font-size: 26px; line-height: 1.25; }
+.license-hero .license-sub {
+  color: var(--muted);
+  margin: 0;
+  max-width: 640px;
+  font-size: 15px;
+}
+.license-status-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+}
+.license-hero--trial {
+  background: linear-gradient(180deg, #fff 0%, #f1f9f3 100%);
+  border-color: #cfe6d6;
+}
+.license-hero--trial .license-status-badge { background: #d8efe0; color: #0f5d29; }
+.license-hero--licensed {
+  background: linear-gradient(180deg, #fff 0%, #eef3ff 100%);
+  border-color: #c8d5f3;
+}
+.license-hero--licensed .license-status-badge { background: #dde7ff; color: #1f4ab2; }
+.license-hero--expired,
+.license-hero--invalid {
+  background: linear-gradient(180deg, #fff 0%, #fff3ec 100%);
+  border-color: #f5cdb4;
+}
+.license-hero--expired .license-status-badge,
+.license-hero--invalid .license-status-badge {
+  background: #ffe0d0;
+  color: #a83a07;
+}
+.license-hero--server_unreachable {
+  background: linear-gradient(180deg, #fff 0%, #fffbe8 100%);
+  border-color: #ead78e;
+}
+.license-hero--server_unreachable .license-status-badge {
+  background: #fff2c3;
+  color: var(--warn);
+}
+.license-hero--no_license,
+.license-hero--unknown {
+  background: linear-gradient(180deg, #fff 0%, #fff7f8 100%);
+  border-color: #f0c2c8;
+}
+.license-hero--no_license .license-status-badge,
+.license-hero--unknown .license-status-badge {
+  background: #ffe1e5;
+  color: var(--kfc-red-dark);
+}
+.license-hero .mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.95em;
+}
+
+.license-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+.license-grid--single { grid-template-columns: 1fr; max-width: 640px; }
+@media (max-width: 820px) {
+  .license-grid { grid-template-columns: 1fr; }
+}
+.license-card { display: flex; flex-direction: column; gap: 14px; }
+.license-card h2 { margin: 0; font-size: 18px; }
+.license-card .small { font-size: 13px; line-height: 1.5; margin: 0; }
+
+.license-form { display: flex; flex-direction: column; gap: 14px; margin: 0; }
+.license-input {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: 1px;
+  font-size: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  width: 100%;
+}
+.license-input:focus { outline: 2px solid var(--kfc-red); outline-offset: 1px; }
+.license-input::placeholder { color: #c0c4cc; letter-spacing: 1px; }
+
+.license-card--buy {
+  background: linear-gradient(180deg, #fff 0%, #fff7f8 100%);
+  border-color: #f0c2c8;
+}
+.license-perks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.license-perks li {
+  padding-left: 28px;
+  position: relative;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.license-perks li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background-color: var(--kfc-red);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 8.5l2.5 2.5L12 5.5' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>");
+  background-repeat: no-repeat;
+  background-position: center;
+}
+.btn-buy {
+  align-self: flex-start;
+  padding: 11px 22px;
+  font-size: 15px;
+}
+.license-fineprint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.license-faq {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 18px;
+  background: white;
+}
+.license-faq summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 8px 0;
+  font-size: 14px;
+}
+.license-faq p {
+  margin: 10px 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.license-faq p:last-child { margin-bottom: 8px; }

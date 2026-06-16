@@ -1,83 +1,142 @@
 {% extends "base.html" %}
 {% block title %}License - KFC Entra User Manager{% endblock %}
 {% block content %}
-<section class="panel">
-  <div class="panel-head">
-    <h1>License required</h1>
-  </div>
+{% set state = license_state.state if license_state else 'unknown' %}
 
-  {% if license_state %}
-    {% if license_state.state == 'trial' %}
-      <div class="flash flash-success">
-        Free trial active &middot; <b>{{ license_state.days_remaining }} day(s) remaining</b>
-        (until <span class="mono">{{ license_state.expires_at }}</span>).
-      </div>
-    {% elif license_state.state == 'licensed' %}
-      <div class="flash flash-success">
-        Licensed ({{ license_state.edition or 'pro' }}) &middot; valid until
-        <span class="mono">{{ license_state.expires_at }}</span>.
-      </div>
-    {% elif license_state.state == 'server_unreachable' %}
-      <div class="flash flash-warning">
-        <b>License server unreachable.</b> {{ license_state.message }}
-      </div>
-    {% elif license_state.state == 'expired' %}
-      <div class="flash flash-error">
-        <b>Your free trial has ended.</b> Enter a license key to keep using the app.
-      </div>
-    {% elif license_state.state == 'invalid' %}
-      <div class="flash flash-error">
-        <b>License key rejected.</b> {{ license_state.message }}
-      </div>
-    {% else %}
-      <div class="flash flash-warning">
-        {{ license_state.message or 'No license configured.' }}
-      </div>
-    {% endif %}
-  {% endif %}
-
-  {% if not license_server_set %}
-    <div class="flash flash-warning">
-      <b>No license server is configured</b> (the
-      <code>LICENSE_SERVER_URL</code> env var is empty). The trial still
-      works, but pasted keys can&rsquo;t be validated until a server is
-      set. See <code>tools/license_server/server.py</code> for a
-      reference implementation.
-    </div>
-  {% endif %}
-
-  <h2>Enter a license key</h2>
-  <p class="muted">
-    Paste the key from your purchase confirmation. The app calls the
-    license server to validate it; once it&rsquo;s accepted the verdict
-    is cached for 24 hours so it doesn&rsquo;t re-check on every page load.
+<section class="license-hero license-hero--{{ state }}">
+  <span class="license-status-badge">
+    {%- if state == 'trial' -%}Free trial
+    {%- elif state == 'licensed' -%}Licensed
+    {%- elif state == 'expired' -%}Trial ended
+    {%- elif state == 'invalid' -%}License rejected
+    {%- elif state == 'server_unreachable' -%}Server unreachable
+    {%- elif state == 'no_license' -%}License required
+    {%- else -%}License required
+    {%- endif -%}
+  </span>
+  <h1>
+    {%- if state == 'trial' -%}
+      You&rsquo;re on the free trial &mdash; {{ license_state.days_remaining }} day(s) left
+    {%- elif state == 'licensed' -%}
+      You&rsquo;re all set
+    {%- elif state == 'expired' -%}
+      Your free trial has ended
+    {%- elif state == 'invalid' -%}
+      {{ license_state.message or 'License rejected.' }}
+    {%- elif state == 'server_unreachable' -%}
+      Can&rsquo;t reach the license server
+    {%- else -%}
+      Activate KFC Entra User Manager
+    {%- endif -%}
+  </h1>
+  <p class="license-sub">
+    {%- if state == 'trial' -%}
+      The trial unlocks every feature. Paste a license key any time to
+      keep going past the trial end date.
+    {%- elif state == 'licensed' -%}
+      License valid until <b>{{ license_state.expires_at[:10] }}</b>. The
+      app re-checks this with the license server on every launch.
+    {%- elif state == 'expired' -%}
+      Enter a license key below to keep using the app, or pick up a
+      license &mdash; your trial data stays put either way.
+    {%- elif state == 'invalid' -%}
+      Double-check the key looks like <span class="mono">KFC-XXXX-XXXX-XXXX</span>.
+      If it worked before, contact support so we can investigate.
+    {%- elif state == 'server_unreachable' -%}
+      Check your internet connection and try again. We&rsquo;ll keep
+      retrying in the background.
+    {%- else -%}
+      One license unlocks the app on a single computer for one year.
+    {%- endif -%}
   </p>
-  <form method="post" action="{{ url_for('main.license_save') }}" class="settings-form">
-    <label class="field">
-      <span>License key</span>
-      <input type="text" name="key" autocomplete="off"
-             placeholder="paste here"
-             value="{{ license_state.key if license_state and license_state.key else '' }}">
-    </label>
-    <div class="settings-actions">
-      <button type="submit" class="btn btn-primary">Save &amp; verify</button>
-      {% if license_state and license_state.key %}
-        <button type="submit" class="btn btn-secondary"
-                formaction="{{ url_for('main.license_check') }}">Re-check now</button>
-        <button type="submit" class="btn btn-secondary"
-                formaction="{{ url_for('main.license_clear') }}"
-                onclick="return confirm('Clear the stored license key?');">Clear key</button>
-      {% endif %}
-    </div>
-  </form>
-
-  <h2 style="margin-top: 28px;">Don&rsquo;t have a key?</h2>
-  <p class="muted">
-    Pick up a license to keep using the app once your free trial ends.
-  </p>
-  {% if license_state and license_state.buy_url %}
-    <a class="btn btn-primary" target="_blank" rel="noopener"
-       href="{{ license_state.buy_url }}">&rarr; Buy a license</a>
-  {% endif %}
 </section>
+
+<div class="license-grid {% if state == 'licensed' %}license-grid--single{% endif %}">
+  <section class="panel license-card">
+    <h2>
+      {%- if license_state and license_state.key -%}Your license key
+      {%- else -%}Have a license key?{%- endif -%}
+    </h2>
+    <p class="muted small">
+      {%- if license_state and license_state.key -%}
+        We&rsquo;ve saved this key on this computer and will re-verify it
+        on launch. You only need to enter it once.
+      {%- else -%}
+        Paste the key from your purchase email. We&rsquo;ll verify it
+        with the license server and save it on this computer &mdash;
+        you won&rsquo;t need to enter it again.
+      {%- endif -%}
+    </p>
+
+    <form method="post" action="{{ url_for('main.license_save') }}" class="license-form">
+      <label class="field">
+        <span>License key</span>
+        <input type="text" name="key" autocomplete="off" spellcheck="false"
+               placeholder="KFC-XXXX-XXXX-XXXX"
+               class="license-input"
+               value="{{ license_state.key if license_state and license_state.key else '' }}">
+      </label>
+      <div class="settings-actions">
+        <button type="submit" class="btn btn-primary">Save &amp; verify</button>
+        {% if license_state and license_state.key %}
+          <button type="submit" class="btn btn-secondary"
+                  formaction="{{ url_for('main.license_check') }}">Re-check now</button>
+          <button type="submit" class="btn btn-link"
+                  formaction="{{ url_for('main.license_clear') }}"
+                  onclick="return confirm('Clear the stored license key from this computer?');">Clear key</button>
+        {% endif %}
+      </div>
+    </form>
+  </section>
+
+  {% if state != 'licensed' %}
+    <section class="panel license-card license-card--buy">
+      <h2>
+        {%- if state == 'expired' or state == 'invalid' -%}Pick up a license
+        {%- else -%}Don&rsquo;t have a key yet?{%- endif -%}
+      </h2>
+      <ul class="license-perks">
+        <li>Unlimited users, groups &amp; bulk operations</li>
+        <li>Works in any Microsoft Entra tenant you sign in to</li>
+        <li>Key emailed the second your payment clears</li>
+        <li>One year of updates &amp; support included</li>
+      </ul>
+      {% if license_state and license_state.buy_url %}
+        <a class="btn btn-primary btn-buy" target="_blank" rel="noopener"
+           href="{{ license_state.buy_url }}">Buy a license &rarr;</a>
+      {% endif %}
+      <p class="muted license-fineprint">
+        Secure checkout via Stripe. Each license is bound to one
+        computer; contact support to transfer to a new machine.
+      </p>
+    </section>
+  {% endif %}
+</div>
+
+{% if not license_server_set %}
+  <div class="flash flash-warning">
+    <b>No license server is configured.</b> The trial still works, but
+    pasted keys can&rsquo;t be validated until a server is set
+    (<code>LICENSE_SERVER_URL</code>). See
+    <code>tools/license_server</code> for the reference implementation.
+  </div>
+{% endif %}
+
+<details class="license-faq">
+  <summary>How licensing works</summary>
+  <p>
+    Each license is tied to one computer. The first time you save a
+    key, the app sends a non-PII fingerprint of this machine (a hash
+    of the MAC address &plus; hostname) to the license server, which
+    binds the key to that fingerprint. From then on, the app
+    re-verifies the key on every launch &mdash; if it&rsquo;s ever
+    revoked or expired, the lock takes effect the next time you start
+    the app.
+  </p>
+  <p>
+    Replacing this computer? Email support with your license key and
+    we&rsquo;ll release the binding so you can reactivate on the new
+    machine.
+  </p>
+</details>
 {% endblock %}
