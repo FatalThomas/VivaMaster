@@ -22,6 +22,15 @@
  *     PUT    /admin/api/keys/<key>     -> update fields on an existing key
  *     DELETE /admin/api/keys/<key>     -> remove a key entirely
  *
+ *   STRIPE
+ *     POST /stripe/webhook     -> Stripe Checkout completion handler.
+ *                                  Verifies the signature against
+ *                                  env.STRIPE_WEBHOOK_SECRET, mints a
+ *                                  fresh license key, writes it to KV,
+ *                                  and emails it to the customer via
+ *                                  Resend (env.RESEND_API_KEY +
+ *                                  env.LICENSE_FROM_EMAIL).
+ *
  *   LEGACY (webhook-friendly)
  *     POST /admin/issue        -> same as POST /admin/api/keys but
  *                                  requires only the X-Admin-Token header
@@ -64,6 +73,12 @@ export default {
     // and on what end-date.
     if (path === "/trial-config" && request.method === "GET") {
       return getTrialConfig(env);
+    }
+    // Stripe -> Worker webhook. Mints a license key on successful
+    // checkout and emails it to the customer via Resend. See the
+    // detailed setup in the file header.
+    if (path === "/stripe/webhook" && request.method === "POST") {
+      return handleStripeWebhook(request, env);
     }
 
     // --- admin UI (HTML) ---
@@ -426,6 +441,191 @@ async function adminDeleteKey(env, key) {
   }
   await env.LICENSE_KEYS.delete(key);
   return jsonResponse({ ok: true, key });
+}
+
+
+// =====================================================================
+// Stripe webhook -> mint key -> email via Resend
+// =====================================================================
+//
+// Required secrets (Settings -> Variables and Secrets on the worker):
+//   STRIPE_WEBHOOK_SECRET  - "whsec_..." from Stripe Dashboard ->
+//                            Developers -> Webhooks -> your endpoint
+//   RESEND_API_KEY         - "re_..." from https://resend.com (free tier
+//                            covers 3000 emails / month)
+//   LICENSE_FROM_EMAIL     - the verified-on-Resend sender address,
+//                            e.g. "licenses@yourdomain.com"
+//
+// In Stripe -> Developers -> Webhooks add an endpoint pointing at
+//   https://kfc-licenses.<sub>.workers.dev/stripe/webhook
+// and tick `checkout.session.completed`. Set up the webhook in *test
+// mode* first; the secret is environment-specific. When you flip to
+// live mode, just update STRIPE_WEBHOOK_SECRET.
+
+async function handleStripeWebhook(request, env) {
+  if (!env.STRIPE_WEBHOOK_SECRET) {
+    return jsonResponse({
+      ok: false,
+      message: "Stripe webhook secret not configured on this Worker.",
+    }, 500);
+  }
+  const sigHeader = request.headers.get("Stripe-Signature") || "";
+  const body = await request.text();
+  const valid = await verifyStripeSignature(sigHeader, body, env.STRIPE_WEBHOOK_SECRET);
+  if (!valid) {
+    return jsonResponse({ ok: false, message: "Invalid signature." }, 400);
+  }
+  let event;
+  try { event = JSON.parse(body); } catch (e) {
+    return jsonResponse({ ok: false, message: "Body is not JSON." }, 400);
+  }
+
+  // Only the "checkout completed" event mints keys today. We acknowledge
+  // every other event with 200 so Stripe doesn't retry.
+  if (event.type !== "checkout.session.completed") {
+    return jsonResponse({ ok: true, message: "Event ignored: " + event.type });
+  }
+
+  // Idempotency: Stripe re-delivers webhooks until they get a 2xx, and
+  // a key per Stripe-event-id makes double-charge / duplicate-key
+  // impossible across those retries.
+  const dedupeKey = "__event__:" + event.id;
+  if (await env.LICENSE_KEYS.get(dedupeKey)) {
+    return jsonResponse({ ok: true, message: "Already processed." });
+  }
+
+  const session = event.data && event.data.object || {};
+  const customerEmail =
+    (session.customer_details && session.customer_details.email) ||
+    session.customer_email ||
+    "";
+  if (!customerEmail) {
+    return jsonResponse({
+      ok: false,
+      message: "Checkout session has no customer email - aborting.",
+    }, 400);
+  }
+
+  // Mint the license + write to KV.
+  const key = generateLicenseKey();
+  const entry = {
+    tenant_id: "*",
+    expires_at: isoOneYearFromNow(),
+    edition: "paid",
+    revoked: false,
+    note: "Auto-issued: " + customerEmail + " (Stripe " + (session.id || "?") + ")",
+    created_at: isoNow(),
+    customer_email: customerEmail,
+    stripe_session_id: session.id || "",
+  };
+  await env.LICENSE_KEYS.put(key, JSON.stringify(entry));
+  // Dedupe entry expires after 7 days - past Stripe's retry window.
+  await env.LICENSE_KEYS.put(dedupeKey, "1", { expirationTtl: 7 * 24 * 3600 });
+
+  // Best-effort: email the key. Resend failures don't fail the
+  // webhook (key is already in KV and visible on /admin), but they
+  // do show in the worker logs so the operator can re-send manually.
+  let emailStatus = "skipped";
+  if (env.RESEND_API_KEY && env.LICENSE_FROM_EMAIL) {
+    try {
+      await sendLicenseEmail(env, customerEmail, key, entry);
+      emailStatus = "sent";
+    } catch (e) {
+      console.error("Resend send failed:", e && e.message || e);
+      emailStatus = "failed: " + (e && e.message || "unknown");
+    }
+  }
+  return jsonResponse({ ok: true, key, email: emailStatus });
+}
+
+
+async function verifyStripeSignature(sigHeader, body, secret) {
+  if (!sigHeader) return false;
+  let timestamp = "";
+  const signatures = [];
+  for (const part of sigHeader.split(",")) {
+    const [k, v] = part.split("=");
+    if (k === "t") timestamp = v;
+    if (k === "v1") signatures.push(v);
+  }
+  if (!timestamp || !signatures.length) return false;
+  // Reject events older than 5 minutes (Stripe's default replay window).
+  const age = Math.floor(Date.now() / 1000) - parseInt(timestamp, 10);
+  if (!isFinite(age) || age > 300 || age < -300) return false;
+  const expected = await hmacSha256Hex(secret, timestamp + "." + body);
+  for (const sig of signatures) {
+    if (constantTimeEqual(sig, expected)) return true;
+  }
+  return false;
+}
+
+
+async function hmacSha256Hex(secret, data) {
+  const enc = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false, ["sign"]
+  );
+  const sigBuf = await crypto.subtle.sign("HMAC", cryptoKey, enc.encode(data));
+  return Array.from(new Uint8Array(sigBuf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+
+function constantTimeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) {
+    r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return r === 0;
+}
+
+
+async function sendLicenseEmail(env, toEmail, key, entry) {
+  const expiresDate = (entry.expires_at || "").slice(0, 10);
+  const html = `<!doctype html>
+<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1d1d1f;line-height:1.55;max-width:560px;margin:24px auto;padding:0 16px;">
+  <h2 style="color:#e4002b;margin-top:0;">Your KFC Entra Manager license</h2>
+  <p>Thanks for your purchase! Here&rsquo;s your license key &mdash; keep this email, you&rsquo;ll need the key if you ever reinstall:</p>
+  <p style="background:#f5f5f7;border:1px solid #d2d2d7;border-radius:8px;padding:14px 18px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:600;letter-spacing:1px;text-align:center;">${escapeHtml(key)}</p>
+  <p><b>To activate:</b></p>
+  <ol>
+    <li>Open the KFC Entra User Manager app.</li>
+    <li>Wait until the free-trial banner expires, or click the license page link at the bottom of the banner.</li>
+    <li>Paste the key into the <b>License key</b> field and click <b>Save &amp; verify</b>.</li>
+  </ol>
+  <p>Your license is valid until <b>${escapeHtml(expiresDate)}</b> (one year from today). It works in any tenant you sign in to.</p>
+  <hr style="border:none;border-top:1px solid #d2d2d7;margin:24px 0;">
+  <p style="color:#6e6e73;font-size:13px;margin:0;">Anything wrong with the key? Just reply to this email.</p>
+</body></html>`;
+  const text =
+    "Your KFC Entra Manager license key:\n\n" + key + "\n\n" +
+    "To activate: paste this key into the License field in the app and " +
+    "click Save & verify. Valid until " + expiresDate + ".\n\n" +
+    "Keep this email - you'll need the key if you reinstall on another machine.";
+
+  const resp = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + env.RESEND_API_KEY,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: env.LICENSE_FROM_EMAIL,
+      to: toEmail,
+      subject: "Your KFC Entra Manager license key",
+      html: html,
+      text: text,
+    }),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error("Resend API " + resp.status + ": " + errText);
+  }
+  return resp.json();
 }
 
 
