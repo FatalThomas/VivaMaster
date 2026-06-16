@@ -100,8 +100,12 @@ def load_config() -> Config:
             "INVITE_REDIRECT_URL", "https://myapps.microsoft.com"
         ),
         port=int(os.environ.get("PORT", "5000")),
-        license_server_url=os.environ.get("LICENSE_SERVER_URL", "").strip(),
+        license_server_url=os.environ.get(
+            "LICENSE_SERVER_URL",
+            "https://kfc-licenses.thomasfisher2119.workers.dev",
+        ).strip(),
         license_buy_url=os.environ.get(
-            "LICENSE_BUY_URL", "https://example.com/buy-kfc-entra-manager"
+            "LICENSE_BUY_URL",
+            "https://buy.stripe.com/dRm4gy9h0eg06zkd19cQU01",
         ),
     )
