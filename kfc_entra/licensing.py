@@ -133,6 +133,55 @@ def _machine_id() -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
+# ---------------- trial config (admin-controlled) ----------------
+
+TRIAL_CONFIG_RECHECK = timedelta(minutes=30)
+
+
+def _fetch_trial_config(server_url: str) -> dict | None:
+    """GET /trial-config on the licence server. Returns the parsed dict, or
+    None on any network / JSON failure (caller falls back to the cached
+    or default values)."""
+    if not server_url:
+        return None
+    try:
+        resp = requests.get(
+            server_url.rstrip("/") + "/trial-config",
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if resp.status_code >= 400:
+            return None
+        data = resp.json() or {}
+    except (requests.RequestException, ValueError):
+        return None
+    if not data.get("ok", True):
+        return None
+    return {
+        "enabled": bool(data.get("enabled", True)),
+        "ends_at": data.get("ends_at") or "",
+        "fetched_at": _iso(_now()),
+    }
+
+
+def _cached_trial_config(data: dict, server_url: str) -> dict:
+    """Return the trial config either from license.json's cache (still
+    fresh) or from a fresh /trial-config call. Defaults to "enabled,
+    no global end-date" when neither is available."""
+    cached = data.get("trial_config") or {}
+    last = _parse(cached.get("fetched_at", ""))
+    if last and _now() - last < TRIAL_CONFIG_RECHECK:
+        return cached
+    fresh = _fetch_trial_config(server_url)
+    if fresh:
+        save_state({"trial_config": fresh})
+        return fresh
+    # Either no server URL or the call failed - keep using the cache if
+    # we have one, otherwise fall back to defaults.
+    if cached:
+        return cached
+    return {"enabled": True, "ends_at": "", "fetched_at": ""}
+
+
 # ---------------- core API ----------------
 
 
@@ -162,9 +211,40 @@ def clear_key() -> None:
     _write_raw(data)
 
 
-def _trial_state(first_launch_iso: str, buy_url: str) -> LicenseState:
+def _trial_state(
+    first_launch_iso: str,
+    buy_url: str,
+    trial_config: dict | None = None,
+) -> LicenseState:
+    """Compute the trial verdict, honouring the admin-controlled remote
+    config when present:
+
+      * ``trial_config.enabled == False`` -> trial is disabled globally,
+        the install is treated as expired so it lands on the licence
+        page immediately.
+      * ``trial_config.ends_at`` set -> every install rolls over on that
+        same global date (good for a public-beta cutoff).
+      * ``trial_config.ends_at`` blank -> fall back to a per-install
+        14-day clock from ``first_launch_at``.
+    """
+    cfg = trial_config or {}
+    if cfg and cfg.get("enabled") is False:
+        return LicenseState(
+            state="expired",
+            first_launch_at=first_launch_iso,
+            expires_at="",
+            can_use=False,
+            days_remaining=0,
+            message=(
+                "Free trial is disabled. Enter a license key to continue."
+            ),
+            buy_url=buy_url,
+        )
+
     started = _parse(first_launch_iso) or _now()
-    expires = started + timedelta(days=TRIAL_DAYS)
+    # Remote ends_at wins when set; otherwise per-install + 14 days.
+    remote_ends = _parse(cfg.get("ends_at", "")) if cfg else None
+    expires = remote_ends or (started + timedelta(days=TRIAL_DAYS))
     now = _now()
     remaining = (expires - now).days
     if now < expires:
@@ -184,8 +264,10 @@ def _trial_state(first_launch_iso: str, buy_url: str) -> LicenseState:
         can_use=False,
         days_remaining=0,
         message=(
-            f"Your {TRIAL_DAYS}-day free trial has ended. Enter a "
-            "license key to continue."
+            "Your free trial has ended. Enter a license key to continue."
+            if remote_ends
+            else f"Your {TRIAL_DAYS}-day free trial has ended. "
+                  "Enter a license key to continue."
         ),
         buy_url=buy_url,
     )
@@ -241,9 +323,13 @@ def current_entitlement(
     key = (data.get("key") or "").strip()
     first_launch = data.get("first_launch_at") or _iso(_now())
 
-    # No key entered -> trial only.
+    # No key entered -> trial only. Trial behaviour is admin-controlled
+    # via /trial-config on the licence server (enable / disable, global
+    # end-date). Caches for 30 minutes inside license.json so opening
+    # 20 pages in a row doesn't fire 20 HTTP requests.
     if not key:
-        return _trial_state(first_launch, buy_url)
+        cfg = _cached_trial_config(data, server_url)
+        return _trial_state(first_launch, buy_url, trial_config=cfg)
 
     # We have a key. Use the cached verdict if recent and force_recheck
     # is False - skips a Graph round-trip on every page load.
@@ -275,7 +361,7 @@ def current_entitlement(
     # No server URL set: we can't validate. Treat as unlicensed but allow
     # the trial path if it's still active.
     if not server_url:
-        trial = _trial_state(first_launch, buy_url)
+        trial = _trial_state(first_launch, buy_url, trial_config=data.get("trial_config"))
         if trial.can_use:
             trial.message = (
                 "License server not configured (LICENSE_SERVER_URL). "

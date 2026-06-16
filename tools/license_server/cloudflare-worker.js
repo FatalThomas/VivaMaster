@@ -58,6 +58,13 @@ export default {
     if (path === "/verify" && request.method === "POST") {
       return handleVerify(request, env);
     }
+    // Public read of the trial banner config. The desktop app polls
+    // this on launch so a single source of truth (this Worker) drives
+    // whether the in-app "Free trial - N days remaining" banner shows
+    // and on what end-date.
+    if (path === "/trial-config" && request.method === "GET") {
+      return getTrialConfig(env);
+    }
 
     // --- admin UI (HTML) ---
     if (path === "/admin/login" && request.method === "POST") {
@@ -83,6 +90,12 @@ export default {
       }
       if (path === "/admin/api/stats" && request.method === "GET") {
         return adminStats(env);
+      }
+      if (path === "/admin/api/trial" && request.method === "GET") {
+        return getTrialConfig(env);
+      }
+      if (path === "/admin/api/trial" && request.method === "PUT") {
+        return setTrialConfig(request, env);
       }
       if (path === "/admin/api/keys" && request.method === "GET") {
         return adminListKeys(request, env);
@@ -253,6 +266,37 @@ function handleAdminLogout() {
 // Admin API
 // =====================================================================
 
+// Reserved KV-key prefix. License keys are KFC-style, so this can't
+// collide. Used today for the trial-banner config; future settings
+// (e.g. branding, feature flags) slot in alongside.
+const CONFIG_PREFIX = "__config__:";
+const CONFIG_KEY_TRIAL = CONFIG_PREFIX + "trial";
+
+
+async function getTrialConfig(env) {
+  const raw = await env.LICENSE_KEYS.get(CONFIG_KEY_TRIAL);
+  let cfg = { enabled: true, ends_at: "", updated_at: "" };
+  if (raw) {
+    try { Object.assign(cfg, JSON.parse(raw)); } catch (e) { /* keep defaults */ }
+  }
+  return jsonResponse({ ok: true, ...cfg });
+}
+
+async function setTrialConfig(request, env) {
+  let body;
+  try { body = await request.json(); } catch (e) {
+    return jsonResponse({ ok: false, message: "Invalid JSON body." }, 400);
+  }
+  const cfg = {
+    enabled: Boolean(body.enabled),
+    ends_at: body.ends_at || "",
+    updated_at: isoNow(),
+  };
+  await env.LICENSE_KEYS.put(CONFIG_KEY_TRIAL, JSON.stringify(cfg));
+  return jsonResponse({ ok: true, ...cfg });
+}
+
+
 async function adminStats(env) {
   const list = await env.LICENSE_KEYS.list();
   let total = 0, active = 0, revoked = 0, expired = 0;
@@ -260,7 +304,9 @@ async function adminStats(env) {
   // KV's list() returns up to 1000 entries; for a license server that's
   // plenty. If the customer base outgrows that, paginate by cursor.
   const reads = await Promise.all(
-    list.keys.map((k) => env.LICENSE_KEYS.get(k.name).then((raw) => [k.name, raw]))
+    list.keys
+      .filter((k) => !k.name.startsWith(CONFIG_PREFIX))
+      .map((k) => env.LICENSE_KEYS.get(k.name).then((raw) => [k.name, raw]))
   );
   for (const [name, raw] of reads) {
     if (!raw) continue;
@@ -279,7 +325,9 @@ async function adminListKeys(request, env) {
   const q = (url.searchParams.get("q") || "").trim().toLowerCase();
   const list = await env.LICENSE_KEYS.list({ cursor });
   const reads = await Promise.all(
-    list.keys.map((k) => env.LICENSE_KEYS.get(k.name).then((raw) => [k.name, raw]))
+    list.keys
+      .filter((k) => !k.name.startsWith(CONFIG_PREFIX))
+      .map((k) => env.LICENSE_KEYS.get(k.name).then((raw) => [k.name, raw]))
   );
   const entries = [];
   for (const [name, raw] of reads) {
@@ -579,6 +627,27 @@ const BASE_CSS = `
   .stat.warn .stat-num { color: var(--warn); }
   .stat.err .stat-num { color: var(--err); }
 
+  /* settings card (trial banner) */
+  .settings-card {
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .settings-card h3 { margin: 0 0 4px; }
+  .settings-card .small { margin-bottom: 12px; }
+  .settings-row { margin: 10px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; }
+  .field-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .field-inline span { font-weight: 500; }
+  .field-inline input[type=date] {
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 14px;
+  }
+
   .toolbar {
     display: flex; gap: 10px; align-items: center;
     margin-bottom: 14px;
@@ -706,6 +775,34 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
     <div class="stat warn"><div class="stat-num" id="stat-expired">&mdash;</div><div class="stat-label">Expired</div></div>
     <div class="stat err"><div class="stat-num" id="stat-revoked">&mdash;</div><div class="stat-label">Revoked</div></div>
   </div>
+
+  <section class="settings-card">
+    <h3>Free-trial banner</h3>
+    <p class="muted small">
+      Controls the yellow &ldquo;Free trial &mdash; N day(s) remaining&rdquo; banner
+      shown on every install. Changes are picked up on each app launch
+      (the desktop app caches the config for 30&nbsp;minutes).
+    </p>
+    <div class="settings-row">
+      <label class="checkbox-row">
+        <input type="checkbox" id="trial-enabled">
+        <span><b>Show free-trial banner</b>
+          <small> &mdash; off = installs hit the licence page immediately without a trial</small>
+        </span>
+      </label>
+    </div>
+    <div class="settings-row">
+      <label class="field-inline">
+        <span>Trial ends on</span>
+        <input type="date" id="trial-ends-at">
+        <small> &mdash; blank = each install gets its own 14-day clock from first launch</small>
+      </label>
+    </div>
+    <div class="settings-row">
+      <button class="btn btn-primary" id="trial-save">Save banner settings</button>
+      <span class="muted small" id="trial-status">&nbsp;</span>
+    </div>
+  </section>
 
   <div class="toolbar">
     <input type="search" id="search" placeholder="Search by key, tenant, edition, note...">
@@ -1023,8 +1120,48 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
     if (e.key === 'Escape' && $('#modal-back').classList.contains('show')) closeModal();
   });
 
+  // --- trial banner settings ---
+  async function loadTrialConfig() {
+    try {
+      const r = await fetchJson('/admin/api/trial');
+      $('#trial-enabled').checked = !!r.enabled;
+      $('#trial-ends-at').value = r.ends_at ? r.ends_at.slice(0, 10) : '';
+      if (r.updated_at) {
+        $('#trial-status').textContent = 'Last saved ' + fmtDateTime(r.updated_at);
+      } else {
+        $('#trial-status').textContent = '';
+      }
+    } catch (e) {
+      toast('Trial config load failed: ' + e.message, 'err');
+    }
+  }
+  $('#trial-save').addEventListener('click', async () => {
+    const ends = $('#trial-ends-at').value;
+    const body = {
+      enabled: $('#trial-enabled').checked,
+      ends_at: ends
+        ? (new Date(ends + 'T23:59:00Z')).toISOString().replace(/\\.\\d{3}Z$/, '+00:00')
+        : '',
+    };
+    $('#trial-save').disabled = true;
+    try {
+      await fetchJson('/admin/api/trial', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      toast('Trial settings saved.', 'ok');
+      await loadTrialConfig();
+    } catch (e) {
+      toast('Save failed: ' + e.message, 'err');
+    } finally {
+      $('#trial-save').disabled = false;
+    }
+  });
+
   loadStats();
   loadKeys();
+  loadTrialConfig();
 })();
 </script>
 </body></html>`;
