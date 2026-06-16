@@ -36,7 +36,7 @@
  *   {
  *     "tenant_id": "<entra tenant guid>" | "*",
  *     "expires_at": "2027-12-31T00:00:00+00:00",
- *     "edition": "pro",
+ *     "edition": "paid",
  *     "revoked": false,
  *     "note": "Yum! Australia",
  *     "created_at": "2026-06-16T11:39:00+00:00",   // set by admin UI
@@ -165,7 +165,7 @@ async function handleVerify(request, env) {
     return jsonResponse({
       ok: false,
       expires_at: expiresAt,
-      edition: entry.edition || "pro",
+      edition: entry.edition || "paid",
       message: "This license has expired.",
     });
   }
@@ -180,7 +180,7 @@ async function handleVerify(request, env) {
   return jsonResponse({
     ok: true,
     expires_at: expiresAt,
-    edition: entry.edition || "pro",
+    edition: entry.edition || "paid",
     message: entry.note || "Valid.",
   });
 }
@@ -321,10 +321,13 @@ async function adminUpsertKey(request, env, replaceAll) {
   }
   let key = (body.key || "").trim();
   if (!key) key = generateLicenseKey();
+  // Default-and-pin policy: only one "paid" tier ships today, and the
+  // license is valid for exactly one year from issuance unless the
+  // admin explicitly set a date in the form.
   const entry = {
     tenant_id: body.tenant_id || "*",
-    expires_at: body.expires_at || "",
-    edition: body.edition || "pro",
+    expires_at: body.expires_at || isoOneYearFromNow(),
+    edition: body.edition || "paid",
     revoked: Boolean(body.revoked),
     note: body.note || "",
     created_at: isoNow(),
@@ -399,6 +402,14 @@ function htmlResponse(html, status = 200) {
 
 function isoNow() {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "+00:00");
+}
+
+function isoOneYearFromNow() {
+  const d = new Date();
+  d.setUTCFullYear(d.getUTCFullYear() + 1);
+  // 23:59 UTC so the customer gets the whole final day before they roll.
+  d.setUTCHours(23, 59, 0, 0);
+  return d.toISOString().replace(/\.\d{3}Z$/, "+00:00");
 }
 
 function generateLicenseKey() {
@@ -743,18 +754,17 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
       </div>
       <div class="field">
         <label>Expires at
-          <small>(date - the time is set to 23:59 UTC of the chosen day)</small>
+          <small>(default policy is 1 year; adjust here for refunds / manual extensions)</small>
         </label>
         <input type="date" name="expires_at" id="f-expires">
       </div>
       <div class="field">
-        <label>Edition</label>
-        <input type="text" name="edition" id="f-edition" value="pro" list="edition-options">
-        <datalist id="edition-options">
-          <option value="pro"></option>
-          <option value="enterprise"></option>
-          <option value="trial-extension"></option>
-        </datalist>
+        <label>Edition
+          <small>(only one tier - "paid" - is sold today)</small>
+        </label>
+        <select name="edition" id="f-edition">
+          <option value="paid" selected>Paid</option>
+        </select>
       </div>
       <div class="field">
         <label>Note <small>(internal - customer name, invoice ref, etc.)</small></label>
