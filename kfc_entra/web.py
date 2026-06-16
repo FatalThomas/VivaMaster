@@ -1870,14 +1870,32 @@ _LICENSE_OPEN_ENDPOINTS = frozenset(
 )
 
 
+_LAUNCH_RECHECK_DONE = False
+
+
 def _current_license_state():
+    """Read the current license state, forcing a server round-trip the
+    first time it's called after the app launches.
+
+    The cache inside licensing.py is sized for 24h so we don't beat up
+    the worker on every page load, but that means a revocation issued
+    while the user is away wouldn't take effect until tomorrow without
+    this nudge. Running once per process restart catches it on the next
+    app open while still keeping the rest of the session cache-fast.
+    """
+    global _LAUNCH_RECHECK_DONE
     cfg = current_app.config["KFC_CONFIG"]
-    return licensing.current_entitlement(
+    force = not _LAUNCH_RECHECK_DONE
+    state = licensing.current_entitlement(
         server_url=cfg.license_server_url,
         tenant_id=cfg.tenant_id,
         app_version=__version__,
         buy_url=cfg.license_buy_url,
+        force_recheck=force,
     )
+    if force:
+        _LAUNCH_RECHECK_DONE = True
+    return state
 
 
 @main_bp.route("/license", methods=["GET"])
