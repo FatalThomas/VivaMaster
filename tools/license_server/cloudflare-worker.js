@@ -614,9 +614,9 @@ async function sendLicenseEmail(env, toEmail, key, entry) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: "KFC Entra Manager <" + env.LICENSE_FROM_EMAIL + ">",
+      from: "ENTRA LICENSE MANAGER <" + env.LICENSE_FROM_EMAIL + ">",
       to: toEmail,
-      subject: "Your KFC Entra Manager license key",
+      subject: "[ENTRA LICENSE MANAGER] Your license key inside",
       html: html,
       text: text,
     }),
