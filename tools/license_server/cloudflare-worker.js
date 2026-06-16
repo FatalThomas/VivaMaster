@@ -66,7 +66,10 @@ export default {
     if (path === "/admin/logout" && request.method === "POST") {
       return handleAdminLogout();
     }
-    if (path === "/admin") {
+    // Root + /admin both land on the admin UI - login page if there's
+    // no valid cookie, dashboard otherwise. Anyone hitting the bare
+    // worker URL therefore gets the admin login, not a 404.
+    if (path === "/admin" || path === "/") {
       if (isAdminAuthenticated(request, env)) {
         return htmlResponse(ADMIN_DASHBOARD_HTML);
       }
@@ -220,13 +223,15 @@ async function handleAdminLogin(request, env) {
   return new Response(null, {
     status: 302,
     headers: {
-      "Location": "/admin",
+      "Location": "/",
       "Set-Cookie": [
         COOKIE_NAME + "=" + encodeURIComponent(token),
         "HttpOnly",
         "Secure",
         "SameSite=Strict",
-        "Path=/admin",
+        // Path=/ so the cookie is visible to both / (the new default
+        // landing page) and every /admin/* sub-route.
+        "Path=/",
         "Max-Age=" + COOKIE_MAX_AGE,
       ].join("; "),
     },
@@ -237,8 +242,8 @@ function handleAdminLogout() {
   return new Response(null, {
     status: 302,
     headers: {
-      "Location": "/admin",
-      "Set-Cookie": COOKIE_NAME + "=; Path=/admin; Max-Age=0",
+      "Location": "/",
+      "Set-Cookie": COOKIE_NAME + "=; Path=/; Max-Age=0",
     },
   });
 }
