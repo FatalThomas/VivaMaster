@@ -194,12 +194,32 @@ async function handleVerify(request, env) {
       ok: false,
       expires_at: expiresAt,
       edition: entry.edition || "paid",
-      message: "This license has expired.",
+      message: "This license has expired. Renew to keep using the app.",
     });
   }
 
-  // Best-effort: stamp the last_verified_at so the admin page shows
-  // recent usage. Failures here must NOT block the verdict.
+  // Machine binding: the first computer to verify a key claims it.
+  // Subsequent verify calls from any other computer are rejected
+  // until an admin clears the binding ("Unbind" in the admin UI).
+  const sentMachineId = ((body && body.machine_id) || "").trim();
+  const boundMachineId = (entry.machine_id || "").trim();
+  if (sentMachineId) {
+    if (!boundMachineId) {
+      entry.machine_id = sentMachineId;
+      entry.bound_at = isoNow();
+    } else if (boundMachineId !== sentMachineId) {
+      return jsonResponse({
+        ok: false,
+        expires_at: expiresAt,
+        edition: entry.edition || "paid",
+        message: "This license is already activated on another computer. Contact support to transfer it.",
+      });
+    }
+  }
+
+  // Best-effort: stamp last_verified_at (+ the new binding above) so
+  // the admin page shows recent usage. Failures here must NOT block
+  // the verdict - the next /verify call will simply re-bind.
   try {
     entry.last_verified_at = isoNow();
     await env.LICENSE_KEYS.put(key, JSON.stringify(entry));
@@ -409,14 +429,17 @@ async function adminUpsertKey(request, env, replaceAll) {
     created_at: isoNow(),
   };
   if (!replaceAll) {
-    // Preserve last_verified_at across upserts so admin actions don't
-    // wipe out usage info.
+    // Preserve last_verified_at + machine binding across upserts so
+    // admin actions don't wipe out usage info or accidentally unbind
+    // the key from the customer's computer.
     const existing = await env.LICENSE_KEYS.get(key);
     if (existing) {
       try {
         const e = JSON.parse(existing);
         if (e.last_verified_at) entry.last_verified_at = e.last_verified_at;
         if (e.created_at) entry.created_at = e.created_at;
+        if (e.machine_id) entry.machine_id = e.machine_id;
+        if (e.bound_at) entry.bound_at = e.bound_at;
       } catch (e) { /* ignore */ }
     }
   }
@@ -434,9 +457,15 @@ async function adminUpdateKey(request, env, key) {
     return jsonResponse({ ok: false, message: "Not found." }, 404);
   }
   let entry; try { entry = JSON.parse(existing); } catch (e) { entry = {}; }
-  // Apply partial updates - only the fields the client sent.
-  for (const f of ["tenant_id", "expires_at", "edition", "revoked", "note"]) {
+  // Apply partial updates - only the fields the client sent. Sending
+  // "machine_id" as an empty string clears the binding (= "Unbind" in
+  // the admin UI), which lets the customer reactivate the key from a
+  // different computer after a hardware change.
+  for (const f of ["tenant_id", "expires_at", "edition", "revoked", "note", "machine_id"]) {
     if (body[f] !== undefined) entry[f] = body[f];
+  }
+  if (body.machine_id === "") {
+    entry.bound_at = "";
   }
   await env.LICENSE_KEYS.put(key, JSON.stringify(entry));
   return jsonResponse({ ok: true, key, ...entry });
@@ -1040,12 +1069,13 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
           <th>Expires</th>
           <th>Status</th>
           <th>Note</th>
+          <th>Machine</th>
           <th>Last verified</th>
           <th></th>
         </tr>
       </thead>
       <tbody id="rows">
-        <tr><td colspan="8" class="empty">Loading&hellip;</td></tr>
+        <tr><td colspan="9" class="empty">Loading&hellip;</td></tr>
       </tbody>
     </table>
   </div>
@@ -1167,7 +1197,7 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
   }
 
   async function loadKeys() {
-    $('#rows').innerHTML = '<tr><td colspan="8" class="empty">Loading…</td></tr>';
+    $('#rows').innerHTML = '<tr><td colspan="9" class="empty">Loading…</td></tr>';
     try {
       const q = encodeURIComponent(searchQuery);
       const data = await fetchJson('/admin/api/keys?q=' + q);
@@ -1175,19 +1205,27 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
       nextCursor = data.cursor;
       renderRows();
     } catch (e) {
-      $('#rows').innerHTML = '<tr><td colspan="8" class="empty">' + esc(e.message) + '</td></tr>';
+      $('#rows').innerHTML = '<tr><td colspan="9" class="empty">' + esc(e.message) + '</td></tr>';
       toast('Load failed: ' + e.message, 'err');
     }
   }
 
   function renderRows() {
     if (!allEntries.length) {
-      $('#rows').innerHTML = '<tr><td colspan="8" class="empty">No keys yet. Click "+ New key" to issue one.</td></tr>';
+      $('#rows').innerHTML = '<tr><td colspan="9" class="empty">No keys yet. Click "+ New key" to issue one.</td></tr>';
       return;
     }
     $('#rows').innerHTML = allEntries.map((e) => {
       const [cls, label] = statusOf(e);
       const isRevoked = !!e.revoked;
+      const isBound = !!(e.machine_id && e.machine_id.length);
+      const bindCell = isBound
+        ? '<span class="mono small" title="Bound ' + esc(fmtDateTime(e.bound_at)) + '">' +
+            esc(e.machine_id.slice(0, 10)) + '&hellip;</span>'
+        : '<span class="muted small">unbound</span>';
+      const unbindBtn = isBound
+        ? '<button class="btn btn-tiny" data-unbind="' + esc(e.key) + '">Unbind</button>'
+        : '';
       return (
         '<tr>' +
           '<td><span class="mono">' + esc(e.key) + '</span></td>' +
@@ -1196,11 +1234,13 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
           '<td>' + esc(fmtDate(e.expires_at)) + '</td>' +
           '<td><span class="badge ' + cls + '">' + label + '</span></td>' +
           '<td>' + esc(e.note || '') + '</td>' +
+          '<td>' + bindCell + '</td>' +
           '<td class="mono small">' + esc(fmtDateTime(e.last_verified_at)) + '</td>' +
           '<td class="row-actions">' +
             '<button class="btn btn-tiny" data-edit="' + esc(e.key) + '">Edit</button>' +
             '<button class="btn btn-tiny" data-toggle="' + esc(e.key) + '">' +
               (isRevoked ? 'Restore' : 'Revoke') + '</button>' +
+            unbindBtn +
             '<button class="btn btn-tiny btn-danger" data-delete="' + esc(e.key) + '">Delete</button>' +
           '</td>' +
         '</tr>'
@@ -1209,6 +1249,7 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
 
     $$('[data-edit]').forEach((b) => b.addEventListener('click', () => openEdit(b.dataset.edit)));
     $$('[data-toggle]').forEach((b) => b.addEventListener('click', () => toggleRevoke(b.dataset.toggle)));
+    $$('[data-unbind]').forEach((b) => b.addEventListener('click', () => unbindKey(b.dataset.unbind)));
     $$('[data-delete]').forEach((b) => b.addEventListener('click', () => deleteKey(b.dataset.delete)));
   }
 
@@ -1323,6 +1364,21 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
       await Promise.all([loadStats(), loadKeys()]);
     } catch (err) {
       toast('Delete failed: ' + err.message, 'err');
+    }
+  }
+
+  async function unbindKey(key) {
+    if (!confirm('Unbind ' + key + '? The next computer that verifies the key claims the new binding - use this when a customer reinstalls or replaces a machine.')) return;
+    try {
+      await fetchJson('/admin/api/keys/' + encodeURIComponent(key), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machine_id: '' }),
+      });
+      toast('Unbound.', 'ok');
+      await loadKeys();
+    } catch (err) {
+      toast('Unbind failed: ' + err.message, 'err');
     }
   }
 
