@@ -286,6 +286,14 @@ function handleAdminLogout() {
 // (e.g. branding, feature flags) slot in alongside.
 const CONFIG_PREFIX = "__config__:";
 const CONFIG_KEY_TRIAL = CONFIG_PREFIX + "trial";
+const EVENT_PREFIX = "__event__:";
+
+// Any KV row whose name starts with "__" is internal bookkeeping
+// (config, Stripe-event dedupe markers, etc.) and must be hidden from
+// the admin license views.
+function isInternalKVKey(name) {
+  return typeof name === "string" && name.startsWith("__");
+}
 
 
 async function getTrialConfig(env) {
@@ -325,7 +333,7 @@ async function adminStats(env) {
   // plenty. If the customer base outgrows that, paginate by cursor.
   const reads = await Promise.all(
     list.keys
-      .filter((k) => !k.name.startsWith(CONFIG_PREFIX))
+      .filter((k) => !isInternalKVKey(k.name))
       .map((k) => env.LICENSE_KEYS.get(k.name).then((raw) => [k.name, raw]))
   );
   for (const [name, raw] of reads) {
@@ -346,7 +354,7 @@ async function adminListKeys(request, env) {
   const list = await env.LICENSE_KEYS.list({ cursor });
   const reads = await Promise.all(
     list.keys
-      .filter((k) => !k.name.startsWith(CONFIG_PREFIX))
+      .filter((k) => !isInternalKVKey(k.name))
       .map((k) => env.LICENSE_KEYS.get(k.name).then((raw) => [k.name, raw]))
   );
   const entries = [];
@@ -489,7 +497,7 @@ async function handleStripeWebhook(request, env) {
   // Idempotency: Stripe re-delivers webhooks until they get a 2xx, and
   // a key per Stripe-event-id makes double-charge / duplicate-key
   // impossible across those retries.
-  const dedupeKey = "__event__:" + event.id;
+  const dedupeKey = EVENT_PREFIX + event.id;
   if (await env.LICENSE_KEYS.get(dedupeKey)) {
     return jsonResponse({ ok: true, message: "Already processed." });
   }
