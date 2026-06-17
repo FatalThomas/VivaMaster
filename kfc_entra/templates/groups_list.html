@@ -149,6 +149,7 @@
                   (kind === "owner" ? "owners" : "members") + "/" +
                   encodeURIComponent(u.id) + "/remove";
         var promoteBtn = "";
+        var demoteBtn = "";
         if (kind === "member") {
           var promoteUrl = "/groups/" + encodeURIComponent(groupId) + "/members/" +
                            encodeURIComponent(u.id) + "/promote";
@@ -161,15 +162,25 @@
             'data-label="' + label + '" ' +
             'title="Promote to community admin (group owner)">&#9819;</button>';
         }
+        if (kind === "owner") {
+          var demoteUrl = "/groups/" + encodeURIComponent(groupId) + "/owners/" +
+                          encodeURIComponent(u.id) + "/remove";
+          demoteBtn =
+            '<button type="button" class="user-group-demote" ' +
+            'data-url="' + demoteUrl + '" ' +
+            'data-label="' + label + '" ' +
+            'title="Demote to member (keeps them in the group)">&#8964;</button>';
+        }
         return '<span class="user-group-chip" data-user-id="' + esc(u.id) +
                '" data-kind="' + kind + '">' +
                (kind === "owner" ? '<span class="crown" title="Community admin">&#9819;</span> ' : "") +
                '<span class="user-group-name">' + label + '</span>' +
                promoteBtn +
+               demoteBtn +
                '<button type="button" class="user-group-remove" ' +
                'data-url="' + removeUrl + '" data-label="' + label + '" ' +
                'data-kind-label="' + (kind === "owner" ? "owner / community admin" : "member") + '" ' +
-               'title="' + (kind === "owner" ? "Demote from owner" : "Remove from group") + '">&times;</button>' +
+               'title="' + (kind === "owner" ? "Remove from group entirely" : "Remove from group") + '">&times;</button>' +
                '</span>';
       }).join("") + '</div>';
     }
@@ -193,21 +204,48 @@
           .then(function (res) {
             if (!res.ok) throw new Error(res.data.error || "Failed.");
             kfcToast(label + " promoted to community admin of \"" + groupName + "\".", "success");
-            // Bust the cache for this group and re-render the panel
-            // from a fresh /details fetch so members + owners reflect
-            // the new state. Cheap (one Graph round-trip).
-            delete loaded[groupId];
-            panel.innerHTML = '<span class="spinner spinner-sm"></span> Refreshing&hellip;';
-            fetch("/groups/" + encodeURIComponent(groupId) + "/details", { credentials: "same-origin" })
-              .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
-              .then(function (res2) {
-                if (!res2.ok) throw new Error(res2.data.error || "Reload failed.");
-                loaded[groupId] = true;
-                renderPanel(panel, groupId, groupName, res2.data);
-              })
-              .catch(function (err) {
-                panel.innerHTML = '<span class="muted">Couldn\'t reload: ' + esc(err.message) + '</span>';
-              });
+            refreshPanel();
+          })
+          .catch(function (err) {
+            btn.disabled = false;
+            chip.style.opacity = "1";
+            kfcToast(err.message, "error");
+          });
+      });
+    });
+
+    function refreshPanel() {
+      // Bust the cache and re-fetch members + owners so the chip lists
+      // reflect the new state (e.g. demoted owners show up under
+      // "Members only").
+      delete loaded[groupId];
+      panel.innerHTML = '<span class="spinner spinner-sm"></span> Refreshing&hellip;';
+      fetch("/groups/" + encodeURIComponent(groupId) + "/details", { credentials: "same-origin" })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+        .then(function (res2) {
+          if (!res2.ok) throw new Error(res2.data.error || "Reload failed.");
+          loaded[groupId] = true;
+          renderPanel(panel, groupId, groupName, res2.data);
+        })
+        .catch(function (err) {
+          panel.innerHTML = '<span class="muted">Couldn\'t reload: ' + esc(err.message) + '</span>';
+        });
+    }
+
+    panel.querySelectorAll(".user-group-demote").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var chip = btn.closest(".user-group-chip");
+        var label = btn.dataset.label;
+        var ok = confirm("Demote " + label + " from community admin of \"" + groupName + "\"? They'll stay in the group as a member.");
+        if (!ok) return;
+        btn.disabled = true;
+        chip.style.opacity = "0.5";
+        fetch(btn.dataset.url, { method: "POST", credentials: "same-origin" })
+          .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+          .then(function (res) {
+            if (!res.ok) throw new Error(res.data.error || "Failed.");
+            kfcToast(label + " demoted to member of \"" + groupName + "\".", "success");
+            refreshPanel();
           })
           .catch(function (err) {
             btn.disabled = false;
