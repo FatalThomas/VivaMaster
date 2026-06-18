@@ -1056,6 +1056,7 @@ a:hover { text-decoration: underline; }
   background: white;
 }
 .license-hero h1 { margin: 10px 0 8px; font-size: 26px; line-height: 1.25; }
+.license-hero-actions { margin-top: 16px; }
 .license-hero .license-sub {
   color: var(--muted);
   margin: 0;

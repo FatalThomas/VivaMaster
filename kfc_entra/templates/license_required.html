@@ -49,6 +49,14 @@
       One license unlocks the app on a single computer for one year.
     {%- endif -%}
   </p>
+
+  {% if state == 'licensed' or state == 'trial' %}
+    <div class="license-hero-actions">
+      <a class="btn btn-primary" href="{{ url_for('main.landing') }}">
+        Continue to dashboard &rarr;
+      </a>
+    </div>
+  {% endif %}
 </section>
 
 <div class="license-grid {% if state == 'licensed' %}license-grid--single{% endif %}">
