@@ -903,7 +903,7 @@ const BASE_CSS = `
   }
   .toolbar input[type=search]:focus { outline: 2px solid var(--kfc-red); outline-offset: 1px; }
 
-  .table-wrap { background: white; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .table-wrap { background: white; border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: top; }
   th { background: #fafafa; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-size: 11px; }
@@ -1094,7 +1094,6 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
       <thead>
         <tr>
           <th>Key</th>
-          <th>Tenant</th>
           <th>Edition</th>
           <th>Expires</th>
           <th>Status</th>
@@ -1105,7 +1104,7 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
         </tr>
       </thead>
       <tbody id="rows">
-        <tr><td colspan="9" class="empty">Loading&hellip;</td></tr>
+        <tr><td colspan="8" class="empty">Loading&hellip;</td></tr>
       </tbody>
     </table>
   </div>
@@ -1227,7 +1226,7 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
   }
 
   async function loadKeys() {
-    $('#rows').innerHTML = '<tr><td colspan="9" class="empty">Loading…</td></tr>';
+    $('#rows').innerHTML = '<tr><td colspan="8" class="empty">Loading…</td></tr>';
     try {
       const q = encodeURIComponent(searchQuery);
       const data = await fetchJson('/admin/api/keys?q=' + q);
@@ -1235,14 +1234,14 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
       nextCursor = data.cursor;
       renderRows();
     } catch (e) {
-      $('#rows').innerHTML = '<tr><td colspan="9" class="empty">' + esc(e.message) + '</td></tr>';
+      $('#rows').innerHTML = '<tr><td colspan="8" class="empty">' + esc(e.message) + '</td></tr>';
       toast('Load failed: ' + e.message, 'err');
     }
   }
 
   function renderRows() {
     if (!allEntries.length) {
-      $('#rows').innerHTML = '<tr><td colspan="9" class="empty">No keys yet. Click "+ New key" to issue one.</td></tr>';
+      $('#rows').innerHTML = '<tr><td colspan="8" class="empty">No keys yet. Click "+ New key" to issue one.</td></tr>';
       return;
     }
     $('#rows').innerHTML = allEntries.map((e) => {
@@ -1254,7 +1253,7 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
             esc(e.machine_id.slice(0, 10)) + '&hellip;</span>'
         : '<span class="muted small">unbound</span>';
       const unbindBtn = isBound
-        ? '<button class="icon-btn" data-unbind="' + esc(e.key) + '" title="Unbind from machine">&#128275;</button>'
+        ? '<button class="icon-btn" data-unbind="' + esc(e.key) + '" title="Unbind from machine">&#8855;</button>'
         : '';
       const toggleBtn = isRevoked
         ? '<button class="icon-btn icon-btn-ok" data-toggle="' + esc(e.key) + '" title="Restore">&#8634;</button>'
@@ -1262,7 +1261,6 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
       return (
         '<tr>' +
           '<td><span class="mono">' + esc(e.key) + '</span></td>' +
-          '<td><span class="mono">' + esc(e.tenant_id || '*') + '</span></td>' +
           '<td>' + esc(e.edition || 'pro') + '</td>' +
           '<td>' + esc(fmtDate(e.expires_at)) + '</td>' +
           '<td><span class="badge ' + cls + '">' + label + '</span></td>' +
@@ -1273,7 +1271,7 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
             '<button class="icon-btn" data-edit="' + esc(e.key) + '" title="Edit">&#9998;</button>' +
             toggleBtn +
             unbindBtn +
-            '<button class="icon-btn icon-btn-danger" data-delete="' + esc(e.key) + '" title="Delete permanently">&#128465;</button>' +
+            '<button class="icon-btn icon-btn-danger" data-delete="' + esc(e.key) + '" title="Delete permanently">&#10006;</button>' +
           '</td>' +
         '</tr>'
       );
