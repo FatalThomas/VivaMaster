@@ -923,8 +923,38 @@ const BASE_CSS = `
   .badge.expired { background: #fde7c8; color: var(--warn); }
   .badge.revoked { background: #fbe6e2; color: var(--err); }
 
-  .row-actions { white-space: nowrap; }
+  .row-actions { white-space: nowrap; text-align: right; }
   .row-actions .btn { margin-left: 4px; }
+  .row-actions .icon-btn { margin-left: 2px; }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px; height: 30px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    transition: background .12s, color .12s, border-color .12s;
+  }
+  .icon-btn:hover {
+    background: var(--bg);
+    color: var(--ink);
+    border-color: var(--line);
+  }
+  .icon-btn:focus-visible {
+    outline: 2px solid var(--kfc-red);
+    outline-offset: 1px;
+  }
+  .icon-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .icon-btn-ok:hover { color: var(--ok); border-color: #c4e8d0; background: #e6f5ec; }
+  .icon-btn-warn:hover { color: #8a6300; border-color: #ead78e; background: #fff7d6; }
+  .icon-btn-danger:hover { color: var(--err); border-color: #f3c1c8; background: #fbe6e2; }
 
   .modal-backdrop {
     position: fixed; inset: 0;
@@ -1224,8 +1254,11 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
             esc(e.machine_id.slice(0, 10)) + '&hellip;</span>'
         : '<span class="muted small">unbound</span>';
       const unbindBtn = isBound
-        ? '<button class="btn btn-tiny" data-unbind="' + esc(e.key) + '">Unbind</button>'
+        ? '<button class="icon-btn" data-unbind="' + esc(e.key) + '" title="Unbind from machine">&#128275;</button>'
         : '';
+      const toggleBtn = isRevoked
+        ? '<button class="icon-btn icon-btn-ok" data-toggle="' + esc(e.key) + '" title="Restore">&#8634;</button>'
+        : '<button class="icon-btn icon-btn-warn" data-toggle="' + esc(e.key) + '" title="Revoke">&#8856;</button>';
       return (
         '<tr>' +
           '<td><span class="mono">' + esc(e.key) + '</span></td>' +
@@ -1237,11 +1270,10 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
           '<td>' + bindCell + '</td>' +
           '<td class="mono small">' + esc(fmtDateTime(e.last_verified_at)) + '</td>' +
           '<td class="row-actions">' +
-            '<button class="btn btn-tiny" data-edit="' + esc(e.key) + '">Edit</button>' +
-            '<button class="btn btn-tiny" data-toggle="' + esc(e.key) + '">' +
-              (isRevoked ? 'Restore' : 'Revoke') + '</button>' +
+            '<button class="icon-btn" data-edit="' + esc(e.key) + '" title="Edit">&#9998;</button>' +
+            toggleBtn +
             unbindBtn +
-            '<button class="btn btn-tiny btn-danger" data-delete="' + esc(e.key) + '">Delete</button>' +
+            '<button class="icon-btn icon-btn-danger" data-delete="' + esc(e.key) + '" title="Delete permanently">&#128465;</button>' +
           '</td>' +
         '</tr>'
       );
