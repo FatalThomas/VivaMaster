@@ -13,9 +13,7 @@ from __future__ import annotations
 import json
 import os
 import platform
-import subprocess
 import sys
-import tempfile
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -143,7 +141,13 @@ def _check() -> None:
 
 
 def start_background_check() -> None:
-    """Kick off the once-per-launch update check. Safe to call repeatedly."""
+    """Kick off the once-per-launch update check. Safe to call repeatedly.
+
+    Also opportunistically cleans up the .old file from a previous update
+    swap - the prior session couldn't delete it because it was still the
+    running process at the time.
+    """
+    cleanup_old_exe()
     global _thread_started
     with _lock:
         if _thread_started:
@@ -160,56 +164,32 @@ def get_available_update() -> UpdateInfo | None:
 
 # ---------- one-click self-update (Windows exe builds only) ----------
 #
-# A running exe can't overwrite itself on Windows, so the swap happens in
-# a tiny VBScript launched headlessly via wscript.exe. We previously used
-# a .bat with `ping` as a sleep, which forced a visible CMD window with
-# ping output flashing through it - and the post-copy delay was too short
-# on machines where Windows Defender held the freshly-staged exe open for
-# scanning, causing "Failed to load python311.dll" the moment we tried to
-# launch it.
+# Earlier versions used a .bat/.vbs script that waited for the old exe
+# to exit, copied the new one into place, paused for Defender, then
+# launched the new exe. Two problems:
 #
-# VBScript via wscript.exe runs invisibly (no console), and a 15-second
-# delay after the copy is enough for Defender to finish its real-time
-# scan even on the slowest machines we've tested against.
+#   1. Even at 30s the Defender pause occasionally raced PyInstaller's
+#      single-file bootloader extracting python311.dll, producing a
+#      "Failed to load Python DLL" popup the moment the new exe ran.
+#   2. The script needed cmd.exe or wscript.exe, both of which flash
+#      console windows briefly on some Windows configurations.
+#
+# We now use the much simpler "atomic-swap then exit" pattern.
+# Windows allows renaming a running .exe on the same volume (the
+# process keeps its file handle), so we:
+#
+#   1. Rename the currently-running exe to a .old sibling.
+#   2. Move the freshly-downloaded exe into the original path.
+#   3. Exit the running process.
+#
+# The user's taskbar / Start Menu shortcut still points at the
+# original path - which now resolves to the new exe - so reopening
+# the app picks up the update. The pause between "I clicked Update"
+# and "I clicked the taskbar icon" is plenty for Defender to finish.
+# The .old leftover gets deleted on the next launch.
 
-_UPDATER_VBS = '''Option Explicit
-Dim shell, fso, newExe, targetExe, tries, lastErr
-newExe = "{new_exe}"
-targetExe = "{target_exe}"
 
-Set shell = CreateObject("WScript.Shell")
-Set fso = CreateObject("Scripting.FileSystemObject")
-
-' Wait for the old exe to release its file lock, then overwrite it.
-' Retries once per second for up to a minute.
-tries = 60
-lastErr = -1
-Do While tries > 0
-  On Error Resume Next
-  fso.CopyFile newExe, targetExe, True
-  lastErr = Err.Number
-  Err.Clear
-  On Error Goto 0
-  If lastErr = 0 Then Exit Do
-  WScript.Sleep 1000
-  tries = tries - 1
-Loop
-
-If lastErr <> 0 Then WScript.Quit 1
-
-' Pause for Windows Defender to finish its real-time scan of the
-' freshly-copied exe. Without this, PyInstaller fails to load
-' python311.dll because Defender still has the bundled DLLs open.
-WScript.Sleep 30000
-
-' Launch the new exe (1 = SW_SHOWNORMAL, False = don't wait for it).
-shell.Run """" & targetExe & """", 1, False
-
-' Clean up the staged copy and this script.
-On Error Resume Next
-fso.DeleteFile newExe, True
-fso.DeleteFile WScript.ScriptFullName, True
-'''
+_BACKUP_SUFFIX = ".old"
 
 
 def is_frozen() -> bool:
@@ -219,6 +199,28 @@ def is_frozen() -> bool:
 
 def self_install_supported() -> bool:
     return is_frozen() and platform.system() == "Windows"
+
+
+def _backup_path_for(exe: Path) -> Path:
+    """Path the old exe is renamed to during an update swap."""
+    return exe.with_name(exe.stem + _BACKUP_SUFFIX + exe.suffix)
+
+
+def cleanup_old_exe() -> None:
+    """Delete the .old sibling left behind by the previous update.
+
+    Called once on app startup. Best-effort: any failure is silently
+    ignored (the file will simply linger and we'll try again next
+    launch).
+    """
+    if not self_install_supported():
+        return
+    backup = _backup_path_for(Path(sys.executable))
+    if backup.exists():
+        try:
+            backup.unlink()
+        except OSError:
+            pass
 
 
 def download_update(info: UpdateInfo) -> Path:
@@ -256,26 +258,44 @@ def download_update(info: UpdateInfo) -> Path:
 
 
 def install_update_and_restart(new_exe: Path) -> None:
-    """Spawn the swap-and-relaunch script, then exit so it can take over.
+    """Atomic-swap the running exe with the freshly-downloaded one, then exit.
 
-    The HTTP response telling the UI "restarting" needs a moment to flush
-    before the process dies, hence the delayed os._exit.
+    Sequence: rename the running exe out of the way, move the new exe
+    into the original path, exit. The user reopens via their existing
+    shortcut / taskbar icon - no script, no Defender race, no popup.
+
+    The threading.Timer gives Flask a beat to flush the HTTP response
+    telling the UI "update installed" before the process dies.
     """
     target_exe = Path(sys.executable)
-    script = _UPDATER_VBS.format(new_exe=str(new_exe), target_exe=str(target_exe))
-    fd, vbs_path = tempfile.mkstemp(suffix=".vbs", prefix="kfc_update_")
-    with os.fdopen(fd, "w", encoding="ascii") as fh:
-        fh.write(script)
+    backup_exe = _backup_path_for(target_exe)
 
-    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-        subprocess, "CREATE_NO_WINDOW", 0
-    )
-    # wscript.exe runs VBScript headlessly (no console window). //B
-    # suppresses script error popups, //Nologo skips the banner.
-    subprocess.Popen(
-        ["wscript.exe", "//B", "//Nologo", vbs_path],
-        creationflags=flags,
-        close_fds=True,
-        cwd=tempfile.gettempdir(),
-    )
+    # If a prior update left a .old behind (we couldn't delete it while
+    # it was still running), clean it now before reusing the name.
+    if backup_exe.exists():
+        try:
+            backup_exe.unlink()
+        except OSError:
+            # Worst case: rename below will fail and we'll surface the
+            # error; the user falls back to a manual reinstall.
+            pass
+
+    # 1. Rename the running exe. Windows lets you rename an in-use file
+    #    on the same volume - the process keeps working through its
+    #    existing file handle.
+    os.rename(target_exe, backup_exe)
+    try:
+        # 2. Move the new exe into the original path. os.replace is
+        #    atomic on Windows when source and destination are on the
+        #    same volume.
+        os.replace(new_exe, target_exe)
+    except OSError:
+        # Best-effort rollback so the user isn't left with no exe at
+        # the expected path.
+        os.replace(backup_exe, target_exe)
+        raise
+
+    # 3. Exit so any browser tabs / pywebview windows close, and so the
+    #    user knows the update finished. They reopen at the new version
+    #    via their taskbar shortcut.
     threading.Timer(1.0, os._exit, args=(0,)).start()

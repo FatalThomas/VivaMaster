@@ -91,8 +91,9 @@
       .then(function (res) {
         if (!res.ok) throw new Error(res.data.error || "Update failed.");
         banner.classList.add("update-restarting");
-        banner.innerHTML = "<span>Update downloaded – restarting as version <b>" +
-          res.data.version + "</b>… this window will close; the app reopens by itself.</span>";
+        banner.innerHTML = "<span>Update installed as version <b>" +
+          res.data.version + "</b>. Closing now — reopen the app from your " +
+          "taskbar or Start Menu to launch the new version.</span>";
       })
       .catch(function (err) {
         installBtn.disabled = false;
