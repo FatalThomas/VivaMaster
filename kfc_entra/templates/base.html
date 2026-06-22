@@ -33,7 +33,10 @@
   </div>
 </header>
 
-{% if license_state and license_state.state == 'trial' %}
+{% if license_state
+      and license_state.state == 'trial'
+      and license_state.days_remaining is not none
+      and license_state.days_remaining <= 10 %}
 <div class="trial-banner">
   Free trial &middot; <b>{{ license_state.days_remaining }} day(s) remaining</b>.
   <a href="{{ url_for('main.license_page') }}">Enter a license key</a>

@@ -419,9 +419,22 @@ def current_entitlement(
         )
 
     ok = bool(payload.get("ok"))
+    reason = (payload.get("reason") or "").strip().lower()
     expires_iso = payload.get("expires_at") or ""
     edition = payload.get("edition") or "licensed"
     server_msg = payload.get("message") or ""
+
+    # If the server doesn't recognise the key at all (admin deleted it,
+    # or the customer typed garbage), the install is no different from a
+    # fresh download - clear the stored key and run the trial logic so
+    # the user lands on the trial / "Activate" page rather than a
+    # confusing "License rejected" lock screen.
+    if not ok and reason == "unknown":
+        clear_key()
+        trial_cfg = _cached_trial_config(_read_raw(), server_url)
+        if trial_cfg.get("buy_url"):
+            buy_url = trial_cfg["buy_url"]
+        return _trial_state(first_launch, buy_url, trial_config=trial_cfg)
 
     if ok:
         save_state({
@@ -445,14 +458,18 @@ def current_entitlement(
             buy_url=buy_url,
         )
 
-    # Server explicitly rejected the key.
+    # Server explicitly rejected the key. Expired -> show the dedicated
+    # "your license has expired, renew" page; everything else (revoked,
+    # tenant mismatch, machine mismatch, corrupted) -> the generic
+    # "license rejected" lock screen with the server's message.
     save_state({
         "last_check_at": _iso(now),
         "expires_at": expires_iso,
         "edition": edition,
     })
+    rejection_state = "expired" if reason == "expired" else "invalid"
     return LicenseState(
-        state="invalid",
+        state=rejection_state,
         key=key,
         first_launch_at=first_launch,
         expires_at=expires_iso,

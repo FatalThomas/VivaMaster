@@ -4,9 +4,11 @@
 {% set state = license_state.state if license_state else 'unknown' %}
 
 <section class="license-hero license-hero--{{ state }}">
+  {% set has_key = license_state and license_state.key %}
   <span class="license-status-badge">
     {%- if state == 'trial' -%}Free trial
     {%- elif state == 'licensed' -%}Licensed
+    {%- elif state == 'expired' and has_key -%}License expired
     {%- elif state == 'expired' -%}Trial ended
     {%- elif state == 'invalid' -%}License rejected
     {%- elif state == 'server_unreachable' -%}Server unreachable
@@ -19,6 +21,8 @@
       You&rsquo;re on the free trial &mdash; {{ license_state.days_remaining }} day(s) left
     {%- elif state == 'licensed' -%}
       You&rsquo;re all set
+    {%- elif state == 'expired' and has_key -%}
+      Your license has expired
     {%- elif state == 'expired' -%}
       Your free trial has ended
     {%- elif state == 'invalid' -%}
@@ -36,6 +40,9 @@
     {%- elif state == 'licensed' -%}
       License valid until <b>{{ license_state.expires_at[:10] }}</b>. The
       app re-checks this with the license server on every launch.
+    {%- elif state == 'expired' and has_key -%}
+      Pick up a new license below to keep using the app, or contact
+      support if you think this is a mistake.
     {%- elif state == 'expired' -%}
       Enter a license key below to keep using the app, or pick up a
       license &mdash; your trial data stays put either way.

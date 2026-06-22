@@ -161,7 +161,11 @@ async function handleVerify(request, env) {
 
   const raw = await env.LICENSE_KEYS.get(key);
   if (!raw) {
-    return jsonResponse({ ok: false, message: "Unknown license key." });
+    return jsonResponse({
+      ok: false,
+      reason: "unknown",
+      message: "Unknown license key.",
+    });
   }
   let entry;
   try {
@@ -169,6 +173,7 @@ async function handleVerify(request, env) {
   } catch (e) {
     return jsonResponse({
       ok: false,
+      reason: "corrupt",
       message: "License entry is corrupted - contact support.",
     });
   }
@@ -176,6 +181,7 @@ async function handleVerify(request, env) {
   if (entry.revoked) {
     return jsonResponse({
       ok: false,
+      reason: "revoked",
       message: "This license has been revoked.",
     });
   }
@@ -184,6 +190,7 @@ async function handleVerify(request, env) {
   if (allowedTenant !== "*" && allowedTenant !== tenantId) {
     return jsonResponse({
       ok: false,
+      reason: "tenant_mismatch",
       message: "This license is not authorized for your tenant.",
     });
   }
@@ -192,6 +199,7 @@ async function handleVerify(request, env) {
   if (expiresAt && new Date(expiresAt) < new Date()) {
     return jsonResponse({
       ok: false,
+      reason: "expired",
       expires_at: expiresAt,
       edition: entry.edition || "paid",
       message: "This license has expired. Renew to keep using the app.",
@@ -210,6 +218,7 @@ async function handleVerify(request, env) {
     } else if (boundMachineId !== sentMachineId) {
       return jsonResponse({
         ok: false,
+        reason: "machine_mismatch",
         expires_at: expiresAt,
         edition: entry.edition || "paid",
         message: "This license is already activated on another computer. Contact support to transfer it.",
