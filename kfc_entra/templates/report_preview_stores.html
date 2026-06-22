@@ -101,9 +101,22 @@
   <div class="bulk-panel" id="apply-panel" hidden></div>
 
   <div class="store-list">
+    <div class="store-list-controls">
+      <label class="store-pick">
+        <input type="checkbox" id="select-all-stores" checked>
+        <span>Select all stores</span>
+      </label>
+      <span class="muted small" id="selection-count" aria-live="polite"></span>
+    </div>
     {% for key, sg in stores.items() %}
     {% set info = store_info.get(key, {}) %}
     <div class="store-row" data-store="{{ sg.name }}" {% if sg.is_unknown %}data-unknown="1"{% endif %}>
+      <label class="store-pick">
+        <input type="checkbox" class="store-pick-input"
+               data-store="{{ sg.name }}"
+               {% if not sg.is_unknown %}checked{% endif %}
+               {% if sg.is_unknown %}disabled{% endif %}>
+      </label>
       <div class="store-head">
         <div class="store-id">
           <b class="store-name">{{ sg.name or 'UNKNOWN' }}</b>
@@ -193,13 +206,55 @@
   syncDeleteState();
 
   includeUnknown.addEventListener("change", function () {
+    var on = includeUnknown.checked;
     document.querySelectorAll('.store-row[data-unknown] .store-select').forEach(function (sel) {
-      sel.disabled = !includeUnknown.checked;
+      sel.disabled = !on;
+    });
+    document.querySelectorAll('.store-row[data-unknown] .store-pick-input').forEach(function (cb) {
+      cb.disabled = !on;
+      cb.checked = on;
     });
     document.querySelectorAll('.store-row[data-unknown] [data-role=skip-badge]').forEach(function (b) {
-      b.textContent = includeUnknown.checked ? "opted in" : "skipped";
+      b.textContent = on ? "opted in" : "skipped";
     });
+    syncSelection();
   });
+
+  /* ---- store selection (per-row + master "select all") ---- */
+  var selectAll = document.getElementById("select-all-stores");
+  var selCount = document.getElementById("selection-count");
+  var pickInputs = document.querySelectorAll(".store-pick-input");
+
+  function syncSelection() {
+    var enabled = 0, checked = 0;
+    pickInputs.forEach(function (cb) {
+      if (cb.disabled) return;
+      enabled++;
+      if (cb.checked) checked++;
+    });
+    selectAll.checked = enabled > 0 && checked === enabled;
+    selectAll.indeterminate = checked > 0 && checked < enabled;
+    selectAll.disabled = enabled === 0;
+    selCount.textContent = enabled === 0
+      ? "(no stores available)"
+      : checked + " of " + enabled + " selected";
+    pickInputs.forEach(function (cb) {
+      var row = cb.closest(".store-row");
+      if (row) row.classList.toggle("store-row--unpicked", !cb.checked && !cb.disabled);
+    });
+  }
+
+  selectAll.addEventListener("change", function () {
+    var on = selectAll.checked;
+    pickInputs.forEach(function (cb) {
+      if (!cb.disabled) cb.checked = on;
+    });
+    syncSelection();
+  });
+  pickInputs.forEach(function (cb) {
+    cb.addEventListener("change", syncSelection);
+  });
+  syncSelection();
 
   var KIND_CLASSES = ["kind-exact", "kind-saved", "kind-create", "kind-skip", "kind-suggestion"];
   function paintKind(sel) {
@@ -219,6 +274,12 @@
       if (sel.disabled) return;
       var store = sel.dataset.store;
       if (!store) return;
+      // Skip stores the user has unticked. If the row has no checkbox
+      // (e.g. unknown stores when include-unknown is off) the .checked
+      // read falls back to "false" via the optional chain below, so
+      // those don't slip through either.
+      var pick = sel.closest(".store-row").querySelector(".store-pick-input");
+      if (!pick || !pick.checked) return;
       var val = sel.value || "";
       var parts = val.split("|");
       var idPart = parts[0] || "";
@@ -237,7 +298,7 @@
     var assignments = buildAssignments();
     var mapped = Object.keys(assignments).length;
     if (!mapped) {
-      kfcToast("Pick a group (or 'Create new') for at least one Store.", "warning");
+      kfcToast("Tick at least one store (and make sure it's mapped to a group).", "warning");
       return;
     }
     var promote = promoteAdmins.checked;

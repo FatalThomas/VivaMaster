@@ -902,16 +902,44 @@ a:hover { text-decoration: underline; }
 
 /* Store-mode preview (report_preview_stores.html) */
 .store-list { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.store-list-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px 6px 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
 .store-row {
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 12px 14px;
+  padding: 12px 14px 12px 10px;
   background: white;
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: 30px 1fr 320px;
   gap: 16px;
   align-items: center;
+  transition: opacity 0.15s, background 0.15s;
 }
+.store-row--unpicked { opacity: 0.55; background: var(--bg); }
+.store-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+}
+.store-pick input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--kfc-red);
+  cursor: pointer;
+  margin: 0;
+}
+.store-pick input[disabled] { cursor: not-allowed; opacity: 0.5; }
 .store-row[data-unknown] { opacity: 0.7; background: var(--bg); }
 .store-head { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .store-id { display: flex; flex-direction: column; gap: 2px; }
