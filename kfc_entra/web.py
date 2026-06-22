@@ -1180,15 +1180,17 @@ def report_apply_stores_stream():
 def _categorise_group(group, franchisee_group_ids: set[str]) -> str:
     """Bucket a group as 'store' / 'franchisee' / 'other'.
 
-    Store groups are identified by the same convention the apply flow uses:
-    a display name beginning with "KFC " (case-insensitive). Franchisee
-    groups are identified by id membership in the saved franchisee mappings.
+    The display name is the authoritative signal: anything starting with
+    "KFC " (case-insensitive) is a Store group, period. Only after that
+    do we consult the saved franchisee mappings, so a Store id that's
+    been accidentally written into mappings.json (legacy data) still
+    shows up correctly as a Store - not a Franchisee.
     """
-    if group.id in franchisee_group_ids:
-        return "franchisee"
     name = (group.display_name or "").strip().lower()
     if name.startswith("kfc "):
         return "store"
+    if group.id in franchisee_group_ids:
+        return "franchisee"
     return "other"
 
 
