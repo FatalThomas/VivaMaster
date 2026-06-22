@@ -159,30 +159,57 @@ def get_available_update() -> UpdateInfo | None:
 
 
 # ---------- one-click self-update (Windows exe builds only) ----------
+#
+# A running exe can't overwrite itself on Windows, so the swap happens in
+# a tiny VBScript launched headlessly via wscript.exe. We previously used
+# a .bat with `ping` as a sleep, which forced a visible CMD window with
+# ping output flashing through it - and the post-copy delay was too short
+# on machines where Windows Defender held the freshly-staged exe open for
+# scanning, causing "Failed to load python311.dll" the moment we tried to
+# launch it.
+#
+# VBScript via wscript.exe runs invisibly (no console), and a 15-second
+# delay after the copy is enough for Defender to finish its real-time
+# scan even on the slowest machines we've tested against.
 
-# A running exe can't overwrite itself on Windows, so the swap happens in a
-# tiny batch script: it retries the copy until the old process has exited
-# and released the file lock, then relaunches the updated exe and deletes
-# itself. `ping -n 2` is the portable one-second sleep for batch files.
-_UPDATER_BAT = """@echo off
-set /a tries=60
-:loop
-copy /y "{new_exe}" "{target_exe}" >NUL 2>&1
-if not errorlevel 1 goto done
-set /a tries-=1
-if %tries% leq 0 exit /b 1
-ping -n 2 127.0.0.1 >NUL
-goto loop
-:done
-REM Pause a few seconds before launching: Windows Defender is mid-scan on the
-REM freshly-copied exe, and launching during that scan can leave PyInstaller
-REM unable to load python.dll's dependencies. The popup looks scary but
-REM resolves itself - this delay avoids it.
-ping -n 4 127.0.0.1 >NUL
-start "" "{target_exe}"
-del "{new_exe}" >NUL 2>&1
-del "%~f0"
-"""
+_UPDATER_VBS = '''Option Explicit
+Dim shell, fso, newExe, targetExe, tries, lastErr
+newExe = "{new_exe}"
+targetExe = "{target_exe}"
+
+Set shell = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+
+' Wait for the old exe to release its file lock, then overwrite it.
+' Retries once per second for up to a minute.
+tries = 60
+lastErr = -1
+Do While tries > 0
+  On Error Resume Next
+  fso.CopyFile newExe, targetExe, True
+  lastErr = Err.Number
+  Err.Clear
+  On Error Goto 0
+  If lastErr = 0 Then Exit Do
+  WScript.Sleep 1000
+  tries = tries - 1
+Loop
+
+If lastErr <> 0 Then WScript.Quit 1
+
+' Pause for Windows Defender to finish its real-time scan of the
+' freshly-copied exe. Without this, PyInstaller fails to load
+' python311.dll because Defender still has the bundled DLLs open.
+WScript.Sleep 15000
+
+' Launch the new exe (1 = SW_SHOWNORMAL, False = don't wait for it).
+shell.Run """" & targetExe & """", 1, False
+
+' Clean up the staged copy and this script.
+On Error Resume Next
+fso.DeleteFile newExe, True
+fso.DeleteFile WScript.ScriptFullName, True
+'''
 
 
 def is_frozen() -> bool:
@@ -229,22 +256,24 @@ def download_update(info: UpdateInfo) -> Path:
 
 
 def install_update_and_restart(new_exe: Path) -> None:
-    """Spawn the replacer script, then exit so it can take over.
+    """Spawn the swap-and-relaunch script, then exit so it can take over.
 
     The HTTP response telling the UI "restarting" needs a moment to flush
     before the process dies, hence the delayed os._exit.
     """
     target_exe = Path(sys.executable)
-    script = _UPDATER_BAT.format(new_exe=new_exe, target_exe=target_exe)
-    fd, bat_path = tempfile.mkstemp(suffix=".bat", prefix="kfc_update_")
+    script = _UPDATER_VBS.format(new_exe=str(new_exe), target_exe=str(target_exe))
+    fd, vbs_path = tempfile.mkstemp(suffix=".vbs", prefix="kfc_update_")
     with os.fdopen(fd, "w", encoding="ascii") as fh:
         fh.write(script)
 
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
         subprocess, "CREATE_NO_WINDOW", 0
     )
+    # wscript.exe runs VBScript headlessly (no console window). //B
+    # suppresses script error popups, //Nologo skips the banner.
     subprocess.Popen(
-        ["cmd.exe", "/c", bat_path],
+        ["wscript.exe", "//B", "//Nologo", vbs_path],
         creationflags=flags,
         close_fds=True,
         cwd=tempfile.gettempdir(),
