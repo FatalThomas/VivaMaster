@@ -561,6 +561,25 @@ class GraphClient:
         )
         return [GraphUser.from_api(u) for u in raw]
 
+    def list_user_groups(self, user_id: str) -> list[GraphGroup]:
+        """Return every group the user is a direct member of.
+
+        Uses the OData cast `microsoft.graph.group` against /memberOf so
+        Graph returns only groups (skipping directory roles and other
+        directory objects). Non-transitive: we want the user's *direct*
+        memberships only, which is how the report flow and the per-user
+        chip list both work.
+        """
+        params: dict[str, Any] = {
+            "$select": "id,displayName,description,mailNickname",
+            "$top": 999,
+        }
+        raw = self._collect_paged(
+            f"/users/{user_id}/memberOf/microsoft.graph.group",
+            params=params,
+        )
+        return [GraphGroup.from_api(g) for g in raw]
+
     def batch_remove_members_from_group(
         self, group_id: str, user_ids: list[str]
     ) -> dict[str, tuple[str, str]]:
