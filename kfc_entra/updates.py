@@ -200,7 +200,7 @@ If lastErr <> 0 Then WScript.Quit 1
 ' Pause for Windows Defender to finish its real-time scan of the
 ' freshly-copied exe. Without this, PyInstaller fails to load
 ' python311.dll because Defender still has the bundled DLLs open.
-WScript.Sleep 15000
+WScript.Sleep 30000
 
 ' Launch the new exe (1 = SW_SHOWNORMAL, False = don't wait for it).
 shell.Run """" & targetExe & """", 1, False
