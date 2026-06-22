@@ -167,13 +167,19 @@ def _fetch_trial_config(server_url: str) -> dict | None:
     }
 
 
-def _cached_trial_config(data: dict, server_url: str) -> dict:
+def _cached_trial_config(data: dict, server_url: str, force: bool = False) -> dict:
     """Return the trial config either from license.json's cache (still
     fresh) or from a fresh /trial-config call. Defaults to "enabled,
-    no global end-date" when neither is available."""
+    no global end-date" when neither is available.
+
+    When ``force=True``, the disk cache is bypassed and a fresh fetch is
+    attempted - used on app launch so toggling the banner in /admin
+    takes effect as soon as the customer restarts the app instead of
+    waiting out the 30-minute cache.
+    """
     cached = data.get("trial_config") or {}
     last = _parse(cached.get("fetched_at", ""))
-    if last and _now() - last < TRIAL_CONFIG_RECHECK:
+    if not force and last and _now() - last < TRIAL_CONFIG_RECHECK:
         return cached
     fresh = _fetch_trial_config(server_url)
     if fresh:
@@ -331,7 +337,7 @@ def current_entitlement(
     # end-date + Stripe payment link) once per probe. Remote buy_url
     # wins over the config.py default so the storefront URL can be
     # changed without re-shipping the exe.
-    trial_cfg = _cached_trial_config(data, server_url)
+    trial_cfg = _cached_trial_config(data, server_url, force=force_recheck)
     if trial_cfg.get("buy_url"):
         buy_url = trial_cfg["buy_url"]
 
@@ -431,7 +437,7 @@ def current_entitlement(
     # confusing "License rejected" lock screen.
     if not ok and reason == "unknown":
         clear_key()
-        trial_cfg = _cached_trial_config(_read_raw(), server_url)
+        trial_cfg = _cached_trial_config(_read_raw(), server_url, force=force_recheck)
         if trial_cfg.get("buy_url"):
             buy_url = trial_cfg["buy_url"]
         return _trial_state(first_launch, buy_url, trial_config=trial_cfg)
