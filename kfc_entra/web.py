@@ -1643,8 +1643,15 @@ def offboard_upload_page():
 # left alone. Keep this list short and conservative - it's the only
 # brake between a single button-click and removing every member of the
 # tenant from every group.
-TENANT_OFFBOARD_EXEMPT_ROLE_NAMES = ("global administrator", "yammer")
-TENANT_OFFBOARD_EXEMPT_EMAILS = ("thomasfisher2119@gmail.com",)
+TENANT_OFFBOARD_EXEMPT_ROLE_NAMES = (
+    "global administrator",
+    "yammer administrator",
+    "yammer",
+)
+TENANT_OFFBOARD_EXEMPT_EMAILS = (
+    "thomasfisher2119@gmail.com",
+    "yammertime@yum.com",
+)
 
 
 def _normalise_email(value: str) -> str:

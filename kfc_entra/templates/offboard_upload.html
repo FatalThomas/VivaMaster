@@ -42,9 +42,10 @@
     <b>Never touched:</b>
     <ul>
       <li>Members of any <b>Global Administrator</b> directory role</li>
-      <li>Members of any directory role with <b>Yammer</b> in the name
-          (Yammer Service Administrator etc.)</li>
+      <li>Members of any <b>Yammer Administrator</b> (or other
+          <b>Yammer</b>-named) directory role</li>
       <li>thomasfisher2119@gmail.com</li>
+      <li>yammertime@yum.com</li>
     </ul>
   </div>
   <div class="actions">
@@ -88,10 +89,11 @@
       title: "Scan tenant for offboard?",
       bodyHtml:
         "This lists every user in Entra, removes Global Administrators, " +
-        "anyone in a Yammer admin role, and <code>thomasfisher2119@gmail.com</code>, " +
-        "then opens the preview page where you decide whether to also " +
-        "disable each account. <b>No changes are made yet</b> &mdash; the " +
-        "scan only builds the list.",
+        "anyone in a Yammer / Yammer Administrator role, plus " +
+        "<code>thomasfisher2119@gmail.com</code> and " +
+        "<code>yammertime@yum.com</code>, then opens the preview page where " +
+        "you decide whether to also disable each account. " +
+        "<b>No changes are made yet</b> &mdash; the scan only builds the list.",
       confirmLabel: "Scan tenant",
     }).then(function (ok) {
       if (!ok) return;
