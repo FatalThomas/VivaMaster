@@ -279,6 +279,27 @@ a:hover { text-decoration: underline; }
   border-color: var(--line);
 }
 .btn-secondary:hover { border-color: var(--ink); text-decoration: none; }
+.btn-danger {
+  background: white;
+  color: var(--err);
+  border-color: #f3c1c8;
+}
+.btn-danger:hover {
+  background: var(--err);
+  color: white;
+  border-color: var(--err);
+  text-decoration: none;
+}
+.exempt-list {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 18px;
+  margin: 12px 0 18px;
+  font-size: 14px;
+}
+.exempt-list ul { margin: 6px 0 0 18px; padding: 0; }
+.exempt-list li { margin: 4px 0; }
 .btn-link {
   background: transparent;
   color: var(--muted);

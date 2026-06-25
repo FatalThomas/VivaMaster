@@ -212,6 +212,35 @@ class GraphClient:
             params = None  # nextLink already carries the query string
         return items[:max_items]
 
+    def list_directory_roles(self) -> list[tuple[str, str]]:
+        """Return every *activated* directory role in the tenant as
+        (role_id, display_name) tuples.
+
+        Only activated roles are listed - Entra distinguishes "role
+        templates" (always present, ~80 of them) from "roles" (only the
+        ones that actually have members or have been touched). The
+        offboard exemption only needs activated roles since unactivated
+        ones can't possibly have members to exempt.
+        """
+        raw = self._collect_paged("/directoryRoles", params={"$select": "id,displayName"})
+        return [(r.get("id", ""), r.get("displayName") or "") for r in raw]
+
+    def list_directory_role_members(self, role_id: str) -> list[GraphUser]:
+        """Return every user-type member of a directory role.
+
+        Uses the microsoft.graph.user OData cast so service principals
+        and nested groups are filtered out at the Graph layer.
+        """
+        params: dict[str, Any] = {
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$top": 999,
+        }
+        raw = self._collect_paged(
+            f"/directoryRoles/{role_id}/members/microsoft.graph.user",
+            params=params,
+        )
+        return [GraphUser.from_api(u) for u in raw]
+
     def list_users_by_type(self, user_type: str | None = None) -> list[GraphUser]:
         """List all users, optionally filtered by userType (e.g. 'Guest').
 

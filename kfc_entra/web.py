@@ -1637,6 +1637,115 @@ def offboard_upload_page():
     return render_template("offboard_upload.html", user=current_user())
 
 
+# Hard-coded "never touch" exemptions for the tenant-wide offboard
+# scan. Anything matching one of these by directory-role display name
+# (case-insensitive substring) or by email address (UPN or .mail) gets
+# left alone. Keep this list short and conservative - it's the only
+# brake between a single button-click and removing every member of the
+# tenant from every group.
+TENANT_OFFBOARD_EXEMPT_ROLE_NAMES = ("global administrator", "yammer")
+TENANT_OFFBOARD_EXEMPT_EMAILS = ("thomasfisher2119@gmail.com",)
+
+
+def _normalise_email(value: str) -> str:
+    return (value or "").strip().lower()
+
+
+def _collect_tenant_offboard_targets(client: GraphClient) -> tuple[list[str], dict]:
+    """List every user in the tenant minus the hard-coded exemptions.
+
+    Exemptions are: members of any directory role whose display name
+    contains "Global Administrator" or "Yammer" (case-insensitive), plus
+    every address in TENANT_OFFBOARD_EXEMPT_EMAILS matched against UPN
+    OR .mail OR otherMails when present.
+
+    Returns (emails, stats) where ``stats`` carries the counts the UI
+    surfaces in the preview ("found N users, exempted K admins...").
+    """
+    exempt_user_ids: set[str] = set()
+    exempt_emails: set[str] = {_normalise_email(e) for e in TENANT_OFFBOARD_EXEMPT_EMAILS}
+    exempt_role_hits: list[dict] = []
+
+    for role_id, role_name in client.list_directory_roles():
+        lower = role_name.lower()
+        if not any(needle in lower for needle in TENANT_OFFBOARD_EXEMPT_ROLE_NAMES):
+            continue
+        try:
+            members = client.list_directory_role_members(role_id)
+        except GraphError:
+            members = []
+        for m in members:
+            exempt_user_ids.add(m.id)
+        exempt_role_hits.append({"role": role_name, "member_count": len(members)})
+
+    all_users = client.list_users_by_type()
+    emails: list[str] = []
+    seen_emails: set[str] = set()
+    skipped_no_email = 0
+    exempted_by_role = 0
+    exempted_by_email = 0
+    for u in all_users:
+        if u.id and u.id in exempt_user_ids:
+            exempted_by_role += 1
+            continue
+        candidate_addresses = {
+            _normalise_email(u.mail or ""),
+            _normalise_email(u.user_principal_name or ""),
+        }
+        candidate_addresses.discard("")
+        if candidate_addresses & exempt_emails:
+            exempted_by_email += 1
+            continue
+        # Prefer .mail (the real address), fall back to UPN. Skip users
+        # with neither - the offboard apply matches by email so a record
+        # we can't match wouldn't do anything anyway.
+        addr = _normalise_email(u.mail or "") or _normalise_email(u.user_principal_name or "")
+        if not addr:
+            skipped_no_email += 1
+            continue
+        if addr in seen_emails:
+            continue
+        seen_emails.add(addr)
+        emails.append(addr)
+
+    stats = {
+        "total_users": len(all_users),
+        "target_count": len(emails),
+        "exempted_by_role": exempted_by_role,
+        "exempted_by_email": exempted_by_email,
+        "skipped_no_email": skipped_no_email,
+        "matched_roles": exempt_role_hits,
+    }
+    return emails, stats
+
+
+@main_bp.route("/offboard/scan-tenant", methods=["POST"])
+@login_required
+def offboard_scan_tenant():
+    """Build an offboard target list from every user in the tenant minus
+    the hard-coded exemptions, stash it, and tell the UI which preview
+    page to redirect to.
+    """
+    client = GraphClient(get_access_token())
+    try:
+        emails, stats = _collect_tenant_offboard_targets(client)
+    except GraphError as exc:
+        return jsonify({"error": exc.message}), 502
+    except Exception as exc:  # noqa: BLE001 - JSON-shaped failure
+        return jsonify({"error": str(exc) or "Unexpected server error."}), 500
+    if not emails:
+        return jsonify({
+            "error": "No offboard targets found after exemptions.",
+            "stats": stats,
+        }), 400
+    token = _stash_offboard(emails)
+    return jsonify({
+        "upload_id": token,
+        "preview_url": url_for("main.offboard_preview", upload_id=token),
+        "stats": stats,
+    })
+
+
 @main_bp.route("/offboard/upload", methods=["POST"])
 @login_required
 def offboard_upload():

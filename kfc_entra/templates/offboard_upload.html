@@ -29,6 +29,30 @@
       <a class="btn btn-secondary" href="{{ url_for('main.dashboard') }}">Cancel</a>
     </div>
   </form>
+
+  <hr style="border:none;border-top:1px solid var(--line);margin:32px 0;">
+
+  <h2>Or offboard every user in the tenant</h2>
+  <p class="muted">
+    Scans your entire Entra tenant and queues up every user for offboarding,
+    minus a hard-coded exemption list. Use the same checkboxes on the next
+    page to decide whether to also disable each account.
+  </p>
+  <div class="exempt-list">
+    <b>Never touched:</b>
+    <ul>
+      <li>Members of any <b>Global Administrator</b> directory role</li>
+      <li>Members of any directory role with <b>Yammer</b> in the name
+          (Yammer Service Administrator etc.)</li>
+      <li>thomasfisher2119@gmail.com</li>
+    </ul>
+  </div>
+  <div class="actions">
+    <button type="button" class="btn btn-danger" id="scan-tenant-btn">
+      Scan tenant &amp; build offboard list
+    </button>
+    <span class="muted" id="scan-tenant-status"></span>
+  </div>
 </section>
 {% endblock %}
 
@@ -53,6 +77,48 @@
       input.files = e.dataTransfer.files;
       setName();
     }
+  });
+
+  /* ---- tenant-wide offboard scan ---- */
+  var scanBtn = document.getElementById("scan-tenant-btn");
+  var scanStatus = document.getElementById("scan-tenant-status");
+
+  scanBtn.addEventListener("click", function () {
+    kfcConfirm({
+      title: "Scan tenant for offboard?",
+      bodyHtml:
+        "This lists every user in Entra, removes Global Administrators, " +
+        "anyone in a Yammer admin role, and <code>thomasfisher2119@gmail.com</code>, " +
+        "then opens the preview page where you decide whether to also " +
+        "disable each account. <b>No changes are made yet</b> &mdash; the " +
+        "scan only builds the list.",
+      confirmLabel: "Scan tenant",
+    }).then(function (ok) {
+      if (!ok) return;
+      kfcBusy(scanBtn, true);
+      scanStatus.textContent = "Listing users and resolving admin roles…";
+      fetch({{ url_for('main.offboard_scan_tenant') | tojson }}, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Accept": "application/json" },
+      })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.data.error || "Scan failed.");
+        var s = res.data.stats || {};
+        scanStatus.innerHTML =
+          "Queued <b>" + (s.target_count || 0) + "</b> account(s) " +
+          "(found " + (s.total_users || 0) + " total, exempted " +
+          (s.exempted_by_role || 0) + " by role, " +
+          (s.exempted_by_email || 0) + " by email). Opening preview…";
+        window.location.href = res.data.preview_url;
+      })
+      .catch(function (err) {
+        kfcBusy(scanBtn, false);
+        scanStatus.textContent = "Scan failed: " + err.message;
+        kfcToast(err.message, "error");
+      });
+    });
   });
 })();
 </script>
