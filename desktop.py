@@ -87,7 +87,7 @@ def main() -> None:
         raise RuntimeError(f"Flask server failed to start on port {port}")
 
     webview.create_window(
-        title="KFC Entra User Manager",
+        title="Entra User Manager",
         url=f"http://127.0.0.1:{port}",
         width=1200,
         height=820,

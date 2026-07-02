@@ -1,6 +1,6 @@
-# PyInstaller spec for building the KFC Entra User Manager desktop app.
+# PyInstaller spec for building the Entra User Manager desktop app.
 # Build with:  pyinstaller kfc_entra_manager.spec
-# Output:      dist/KFC Entra User Manager(.exe)
+# Output:      dist/Entra User Manager(.exe)
 
 # -*- mode: python ; coding: utf-8 -*-
 
@@ -46,7 +46,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="KFC Entra User Manager",
+    name="Entra User Manager",
     icon="kfc_entra/static/img/app.ico",
     debug=False,
     bootloader_ignore_signals=False,

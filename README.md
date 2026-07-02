@@ -1,4 +1,4 @@
-# KFC Entra User Manager
+# Entra User Manager
 
 A focused tool for KFC admins to add new colleagues to Microsoft Entra (Azure
 AD). Each invitation flows through the same two-step pattern your team
@@ -96,7 +96,7 @@ pip install -r requirements.txt
 pyinstaller kfc_entra_manager.spec
 ```
 
-Result: `dist\KFC Entra User Manager.exe` - a single-file launcher that
+Result: `dist\Entra User Manager.exe` - a single-file launcher that
 opens the app in a native window.
 
 > The exe works with zero configuration - each user signs in with their own

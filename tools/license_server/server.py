@@ -1,4 +1,4 @@
-"""Sample license server for the KFC Entra User Manager paywall.
+"""Sample license server for the Entra User Manager paywall.
 
 Deploy this anywhere that can answer HTTP - a Cloudflare Worker, a tiny
 VPS, fly.io, Render, an Azure Function. The app POSTs to ``/verify``

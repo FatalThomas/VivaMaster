@@ -234,7 +234,7 @@ def download_update(info: UpdateInfo) -> Path:
         raise RuntimeError("This release has no exe attached.")
     updates_dir = config_dir() / "updates"
     updates_dir.mkdir(parents=True, exist_ok=True)
-    target = updates_dir / f"KFC Entra User Manager-{info.latest_version}.exe"
+    target = updates_dir / f"Entra User Manager-{info.latest_version}.exe"
     partial = target.with_suffix(".partial")
 
     with requests.get(

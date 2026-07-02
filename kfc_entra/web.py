@@ -1,4 +1,4 @@
-"""Flask app factory and routes for the KFC Entra User Manager."""
+"""Flask app factory and routes for the Entra User Manager."""
 from __future__ import annotations
 
 import csv

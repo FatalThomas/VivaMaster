@@ -495,7 +495,7 @@ class GraphClient:
 
         body = {
             "displayName": display_name,
-            "description": description or "Created by KFC Entra User Manager",
+            "description": description or "Created by Entra User Manager",
             "mailEnabled": True,
             "securityEnabled": False,
             "mailNickname": sanitise_mail_nickname(display_name),

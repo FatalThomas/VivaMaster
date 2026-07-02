@@ -310,7 +310,7 @@ function handleAdminLogout() {
 // Admin API
 // =====================================================================
 
-// Reserved KV-key prefix. License keys are KFC-style, so this can't
+// Reserved KV-key prefix. License keys are EUM-style, so this can't
 // collide. Used today for the trial-banner config; future settings
 // (e.g. branding, feature flags) slot in alongside.
 const CONFIG_PREFIX = "__config__:";
@@ -634,12 +634,12 @@ async function sendLicenseEmail(env, toEmail, key, entry) {
   const expiresDate = (entry.expires_at || "").slice(0, 10);
   const html = `<!doctype html>
 <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1d1d1f;line-height:1.55;max-width:560px;margin:24px auto;padding:0 16px;">
-  <h2 style="color:#e4002b;margin-top:0;">Your KFC Entra Manager license</h2>
+  <h2 style="color:#0f6cbd;margin-top:0;">Your Entra User Manager license</h2>
   <p>Thanks for your purchase! Here&rsquo;s your license key &mdash; keep this email, you&rsquo;ll need the key if you ever reinstall:</p>
   <p style="background:#f5f5f7;border:1px solid #d2d2d7;border-radius:8px;padding:14px 18px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:600;letter-spacing:1px;text-align:center;">${escapeHtml(key)}</p>
   <p><b>To activate:</b></p>
   <ol>
-    <li>Open the KFC Entra User Manager app.</li>
+    <li>Open the Entra User Manager app.</li>
     <li>Wait until the free-trial banner expires, or click the license page link at the bottom of the banner.</li>
     <li>Paste the key into the <b>License key</b> field and click <b>Save &amp; verify</b>.</li>
   </ol>
@@ -648,7 +648,7 @@ async function sendLicenseEmail(env, toEmail, key, entry) {
   <p style="color:#6e6e73;font-size:13px;margin:0;">Anything wrong with the key? Just reply to this email.</p>
 </body></html>`;
   const text =
-    "Your KFC Entra Manager license key:\n\n" + key + "\n\n" +
+    "Your Entra User Manager license key:\n\n" + key + "\n\n" +
     "To activate: paste this key into the License field in the app and " +
     "click Save & verify. Valid until " + expiresDate + ".\n\n" +
     "Keep this email - you'll need the key if you reinstall on another machine.";
@@ -712,7 +712,7 @@ function isoOneYearFromNow() {
 }
 
 function generateLicenseKey() {
-  // KFC-XXXX-XXXX-XXXX, A-Z + 0-9, cryptographically random.
+  // EUM-XXXX-XXXX-XXXX, A-Z + 0-9, cryptographically random.
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = new Uint8Array(12);
   crypto.getRandomValues(bytes);
@@ -724,7 +724,7 @@ function generateLicenseKey() {
     }
     groups.push(s);
   }
-  return "KFC-" + groups.join("-");
+  return "EUM-" + groups.join("-");
 }
 
 
@@ -745,7 +745,7 @@ function adminLoginHtml(errorMessage) {
 </head><body>
 <main class="login-shell">
   <div class="brand">
-    <div class="brand-mark">KFC</div>
+    <div class="brand-mark">EUM</div>
     <div class="brand-title">Entra Manager &middot; License admin</div>
   </div>
   ${err}
@@ -766,8 +766,8 @@ function adminLoginHtml(errorMessage) {
 
 const BASE_CSS = `
   :root {
-    --kfc-red: #e4002b;
-    --kfc-red-dark: #b80022;
+    --accent: #0f6cbd;
+    --accent-dark: #0a4f8a;
     --ink: #1d1d1f;
     --muted: #6e6e73;
     --bg: #f5f5f7;
@@ -784,7 +784,7 @@ const BASE_CSS = `
     background: var(--bg);
     font-size: 14px;
   }
-  a { color: var(--kfc-red); text-decoration: none; }
+  a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   .muted { color: var(--muted); }
   .small { font-size: 12px; }
@@ -805,11 +805,11 @@ const BASE_CSS = `
   }
   .btn:hover { background: #fafafa; }
   .btn-primary {
-    background: var(--kfc-red);
+    background: var(--accent);
     color: white;
-    border-color: var(--kfc-red);
+    border-color: var(--accent);
   }
-  .btn-primary:hover { background: var(--kfc-red-dark); }
+  .btn-primary:hover { background: var(--accent-dark); }
   .btn-danger { color: var(--err); border-color: #f3c1c8; }
   .btn-danger:hover { background: #fbe6e2; }
   .btn-tiny { padding: 4px 10px; font-size: 12px; }
@@ -828,7 +828,7 @@ const BASE_CSS = `
   .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
   .brand-mark {
     width: 44px; height: 44px;
-    background: var(--kfc-red); color: white;
+    background: var(--accent); color: white;
     border-radius: 8px;
     display: flex; align-items: center; justify-content: center;
     font-weight: 700; letter-spacing: 1px;
@@ -843,7 +843,7 @@ const BASE_CSS = `
     border-radius: 8px;
     font-size: 14px;
   }
-  .login-form input:focus { outline: 2px solid var(--kfc-red); outline-offset: 1px; }
+  .login-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   .login-form .btn { width: 100%; }
   .err {
     background: #fbe6e2; color: var(--err);
@@ -853,12 +853,12 @@ const BASE_CSS = `
 
   /* dashboard */
   .topbar {
-    background: var(--kfc-red); color: white;
+    background: var(--accent); color: white;
     padding: 12px 24px;
     display: flex; align-items: center; justify-content: space-between;
   }
   .topbar .brand-title { color: white; }
-  .topbar .brand-mark { background: white; color: var(--kfc-red); }
+  .topbar .brand-mark { background: white; color: var(--accent); }
   .topbar .who { font-size: 13px; opacity: 0.85; margin-right: 12px; }
   .topbar .btn { background: rgba(255,255,255,0.18); color: white; border-color: transparent; }
   .topbar .btn:hover { background: rgba(255,255,255,0.28); }
@@ -910,7 +910,7 @@ const BASE_CSS = `
     border-radius: 8px;
     font-size: 14px;
   }
-  .toolbar input[type=search]:focus { outline: 2px solid var(--kfc-red); outline-offset: 1px; }
+  .toolbar input[type=search]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
   .table-wrap { background: white; border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
@@ -957,7 +957,7 @@ const BASE_CSS = `
     border-color: var(--line);
   }
   .icon-btn:focus-visible {
-    outline: 2px solid var(--kfc-red);
+    outline: 2px solid var(--accent);
     outline-offset: 1px;
   }
   .icon-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
@@ -994,7 +994,7 @@ const BASE_CSS = `
     font-family: inherit;
   }
   .field input:focus, .field select:focus, .field textarea:focus {
-    outline: 2px solid var(--kfc-red); outline-offset: 1px;
+    outline: 2px solid var(--accent); outline-offset: 1px;
   }
   .field .checkbox-row {
     display: flex; align-items: center; gap: 8px;
@@ -1038,7 +1038,7 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
 </head><body>
 <header class="topbar">
   <div style="display:flex; align-items:center; gap:12px;">
-    <div class="brand-mark">KFC</div>
+    <div class="brand-mark">EUM</div>
     <div class="brand-title">Entra Manager &middot; License admin</div>
   </div>
   <div>
@@ -1127,7 +1127,7 @@ const ADMIN_DASHBOARD_HTML = `<!doctype html>
       <input type="hidden" name="originalKey" id="originalKey" value="">
       <div class="field">
         <label>License key
-          <small>blank = auto-generate (KFC-XXXX-XXXX-XXXX)</small>
+          <small>blank = auto-generate (EUM-XXXX-XXXX-XXXX)</small>
         </label>
         <input type="text" name="key" id="f-key" placeholder="auto-generate">
       </div>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}License - KFC Entra User Manager{% endblock %}
+{% block title %}License - Entra User Manager{% endblock %}
 {% block content %}
 {% set state = license_state.state if license_state else 'unknown' %}
 
@@ -30,7 +30,7 @@
     {%- elif state == 'server_unreachable' -%}
       Can&rsquo;t reach the license server
     {%- else -%}
-      Activate KFC Entra User Manager
+      Activate Entra User Manager
     {%- endif -%}
   </h1>
   <p class="license-sub">
@@ -47,7 +47,7 @@
       Enter a license key below to keep using the app, or pick up a
       license &mdash; your trial data stays put either way.
     {%- elif state == 'invalid' -%}
-      Double-check the key looks like <span class="mono">KFC-XXXX-XXXX-XXXX</span>.
+      Double-check the key looks like <span class="mono">EUM-XXXX-XXXX-XXXX</span>.
       If it worked before, contact support so we can investigate.
     {%- elif state == 'server_unreachable' -%}
       Check your internet connection and try again. We&rsquo;ll keep
@@ -87,7 +87,7 @@
       <label class="field">
         <span>License key</span>
         <input type="text" name="key" autocomplete="off" spellcheck="false"
-               placeholder="KFC-XXXX-XXXX-XXXX"
+               placeholder="EUM-XXXX-XXXX-XXXX"
                class="license-input"
                value="{{ license_state.key if license_state and license_state.key else '' }}">
       </label>

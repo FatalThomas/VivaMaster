@@ -1,7 +1,7 @@
 :root {
-  --kfc-red: #e4002b;
-  --kfc-red-dark: #b80022;
-  --kfc-white: #ffffff;
+  --accent: #0f6cbd;
+  --accent-dark: #0a4f8a;
+  --on-accent: #ffffff;
   --ink: #1a1a1a;
   --muted: #6b7280;
   --line: #e5e7eb;
@@ -19,12 +19,12 @@ html, body {
   color: var(--ink);
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
-a { color: var(--kfc-red); text-decoration: none; }
+a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 .topbar {
-  background: var(--kfc-red);
-  color: var(--kfc-white);
+  background: var(--accent);
+  color: var(--on-accent);
   box-shadow: 0 2px 4px rgba(0,0,0,.08);
 }
 .topbar-inner {
@@ -42,20 +42,17 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   gap: 12px;
-  color: var(--kfc-white);
+  color: var(--on-accent);
   font-weight: 600;
   font-size: 18px;
 }
 .brand:hover { text-decoration: none; }
 .brand-mark {
-  background: var(--kfc-white);
-  border-radius: 6px;
-  padding: 3px 5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
-.brand-mark img { display: block; height: 32px; width: auto; }
+.brand-mark img { display: block; height: 34px; width: auto; border-radius: 8px; }
 .brand-text { opacity: .95; }
 .topbar nav {
   display: flex;
@@ -66,7 +63,7 @@ a:hover { text-decoration: underline; }
   justify-content: flex-end;
 }
 .topbar nav a {
-  color: var(--kfc-white);
+  color: var(--on-accent);
   font-weight: 500;
   opacity: .9;
 }
@@ -135,11 +132,11 @@ a:hover { text-decoration: underline; }
   transition: border-color .15s, transform .15s;
 }
 .card:hover {
-  border-color: var(--kfc-red);
+  border-color: var(--accent);
   text-decoration: none;
   transform: translateY(-1px);
 }
-.card h2 { margin: 0 0 6px; font-size: 18px; color: var(--kfc-red); }
+.card h2 { margin: 0 0 6px; font-size: 18px; color: var(--accent); }
 .card p  { margin: 0; color: var(--muted); font-size: 14px; }
 
 .form { display: flex; flex-direction: column; gap: 16px; max-width: 520px; }
@@ -153,7 +150,7 @@ a:hover { text-decoration: underline; }
   border-radius: 8px;
   font-size: 14px;
 }
-.field input:focus { outline: 2px solid var(--kfc-red); outline-offset: 1px; }
+.field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .checkbox {
   display: flex;
   align-items: center;
@@ -221,7 +218,7 @@ a:hover { text-decoration: underline; }
 }
 .kfc-dock-fill {
   height: 100%;
-  background: var(--kfc-red);
+  background: var(--accent);
   transition: width 0.25s;
 }
 .kfc-dock-meta { color: var(--muted); margin-bottom: 8px; }
@@ -269,10 +266,10 @@ a:hover { text-decoration: underline; }
   transition: background .15s, border-color .15s;
 }
 .btn-primary {
-  background: var(--kfc-red);
-  color: var(--kfc-white);
+  background: var(--accent);
+  color: var(--on-accent);
 }
-.btn-primary:hover { background: var(--kfc-red-dark); text-decoration: none; color: white; }
+.btn-primary:hover { background: var(--accent-dark); text-decoration: none; color: white; }
 .btn-secondary {
   background: white;
   color: var(--ink);
@@ -456,7 +453,7 @@ a:hover { text-decoration: underline; }
   width: 18px;
   height: 18px;
   border: 3px solid rgba(228,0,43,.25);
-  border-top-color: var(--kfc-red);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: kfc-spin .7s linear infinite;
   vertical-align: -3px;
@@ -482,7 +479,7 @@ a:hover { text-decoration: underline; }
 }
 .bulk-bar-fill {
   height: 100%;
-  background: var(--kfc-red);
+  background: var(--accent);
   border-radius: 999px;
   transition: width .2s ease;
 }
@@ -535,14 +532,14 @@ a:hover { text-decoration: underline; }
   font-weight: 600;
   color: var(--muted);
 }
-.chip:hover { text-decoration: none; border-color: var(--kfc-red); color: var(--kfc-red); }
-.chip-active { background: var(--kfc-red); border-color: var(--kfc-red); color: white; }
+.chip:hover { text-decoration: none; border-color: var(--accent); color: var(--accent); }
+.chip-active { background: var(--accent); border-color: var(--accent); color: white; }
 .chip-active:hover { color: white; }
 
 .bulk-actions-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
 
 .select-col { width: 1%; }
-.select-col input { width: 16px; height: 16px; accent-color: var(--kfc-red); }
+.select-col input { width: 16px; height: 16px; accent-color: var(--accent); }
 
 .sticky-bar {
   position: sticky;
@@ -576,11 +573,11 @@ a:hover { text-decoration: underline; }
   cursor: pointer;
 }
 .dropzone:hover, .dropzone.drag {
-  border-color: var(--kfc-red);
+  border-color: var(--accent);
   background: #fff5f6;
 }
 .dropzone .dz-icon { font-size: 34px; display: block; margin-bottom: 8px; }
-.dropzone b { color: var(--kfc-red); }
+.dropzone b { color: var(--accent); }
 .dropzone input[type=file] { display: none; }
 .dz-filename { margin-top: 10px; font-weight: 600; }
 
@@ -628,7 +625,7 @@ a:hover { text-decoration: underline; }
   border-radius: 8px;
   font-size: 13.5px;
 }
-.combo input:focus { outline: 2px solid var(--kfc-red); outline-offset: 1px; }
+.combo input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .combo-list {
   position: absolute;
   top: calc(100% + 4px);
@@ -650,7 +647,7 @@ a:hover { text-decoration: underline; }
 }
 .combo-item:hover, .combo-item.active { background: #fff0f2; }
 .combo-item .muted { font-size: 12px; }
-.combo-create { border-top: 1px dashed var(--line); color: var(--kfc-red); font-weight: 600; }
+.combo-create { border-top: 1px dashed var(--line); color: var(--accent); font-weight: 600; }
 
 .report-toolbar {
   display: flex;
@@ -733,9 +730,9 @@ a:hover { text-decoration: underline; }
   padding: 22px 16px;
   margin: 24px auto;
   background: var(--bg);
-  border: 2px dashed var(--kfc-red);
+  border: 2px dashed var(--accent);
   border-radius: 12px;
-  color: var(--kfc-red);
+  color: var(--accent);
   user-select: all;
 }
 .device-actions {
@@ -767,7 +764,7 @@ a:hover { text-decoration: underline; }
   width: 14px;
   height: 14px;
   border: 2px solid var(--line);
-  border-top-color: var(--kfc-red);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
@@ -881,8 +878,8 @@ a:hover { text-decoration: underline; }
 
 /* Offboard card on the dashboard - subtle red accent so it stands out */
 .card-danger { border-color: #f4c4c4; }
-.card-danger:hover { border-color: var(--kfc-red); }
-.card-danger h2 { color: var(--kfc-red); }
+.card-danger:hover { border-color: var(--accent); }
+.card-danger h2 { color: var(--accent); }
 
 /* Drag/drop file picker used by the offboard upload page */
 .upload-form { display: flex; flex-direction: column; gap: 16px; max-width: 620px; }
@@ -899,10 +896,10 @@ a:hover { text-decoration: underline; }
   cursor: pointer;
   transition: border-color .15s, background .15s;
 }
-.upload-zone.dragging { border-color: var(--kfc-red); background: #fff6f7; }
+.upload-zone.dragging { border-color: var(--accent); background: #fff6f7; }
 .upload-art { font-size: 28px; opacity: 0.6; }
 .upload-prompt { font-size: 14px; }
-.upload-prompt .link { color: var(--kfc-red); font-weight: 600; }
+.upload-prompt .link { color: var(--accent); font-weight: 600; }
 .upload-hint { font-size: 12px; }
 .upload-filename { font-size: 13px; margin-top: 6px; word-break: break-all; }
 
@@ -961,7 +958,7 @@ a:hover { text-decoration: underline; }
 .store-pick input[type="checkbox"] {
   width: 18px;
   height: 18px;
-  accent-color: var(--kfc-red);
+  accent-color: var(--accent);
   cursor: pointer;
   margin: 0;
 }
@@ -987,7 +984,7 @@ a:hover { text-decoration: underline; }
   font-size: 13px;
   background: white;
 }
-.store-select:focus { outline: 2px solid var(--kfc-red); outline-offset: 1px; }
+.store-select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .store-select:disabled { background: var(--bg); cursor: not-allowed; }
 
 /* Selected-option colour cue: the <select> background changes so a glance
@@ -1158,13 +1155,13 @@ a:hover { text-decoration: underline; }
 }
 .license-hero--no_license,
 .license-hero--unknown {
-  background: linear-gradient(180deg, #fff 0%, #fff7f8 100%);
-  border-color: #f0c2c8;
+  background: linear-gradient(180deg, #fff 0%, #eef5fc 100%);
+  border-color: #c3dcf2;
 }
 .license-hero--no_license .license-status-badge,
 .license-hero--unknown .license-status-badge {
-  background: #ffe1e5;
-  color: var(--kfc-red-dark);
+  background: #dbeafe;
+  color: var(--accent-dark);
 }
 .license-hero .mono {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -1195,12 +1192,12 @@ a:hover { text-decoration: underline; }
   border-radius: 8px;
   width: 100%;
 }
-.license-input:focus { outline: 2px solid var(--kfc-red); outline-offset: 1px; }
+.license-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .license-input::placeholder { color: #c0c4cc; letter-spacing: 1px; }
 
 .license-card--buy {
-  background: linear-gradient(180deg, #fff 0%, #fff7f8 100%);
-  border-color: #f0c2c8;
+  background: linear-gradient(180deg, #fff 0%, #eef5fc 100%);
+  border-color: #c3dcf2;
 }
 .license-perks {
   margin: 0;
@@ -1224,7 +1221,7 @@ a:hover { text-decoration: underline; }
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background-color: var(--kfc-red);
+  background-color: var(--accent);
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 8.5l2.5 2.5L12 5.5' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>");
   background-repeat: no-repeat;
   background-position: center;
