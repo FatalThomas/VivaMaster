@@ -97,7 +97,10 @@ def load_config() -> Config:
         flask_secret_key=os.environ.get("FLASK_SECRET_KEY", "").strip()
         or secrets.token_hex(32),
         invite_redirect_url=os.environ.get(
-            "INVITE_REDIRECT_URL", "https://myapps.microsoft.com"
+            "INVITE_REDIRECT_URL",
+            # Land accepted invitees directly in the Viva Engage network
+            # instead of the generic myapps portal.
+            "https://engage.cloud.microsoft/main/org/fishfoodgroup.com",
         ),
         port=int(os.environ.get("PORT", "5000")),
         license_server_url=os.environ.get(

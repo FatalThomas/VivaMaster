@@ -9,6 +9,17 @@ import requests
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 DEFAULT_TIMEOUT = 30
 
+# Fixed paragraph injected into Microsoft's B2B invitation email
+# (invitedUserMessageInfo.customizedMessageBody). Deliberately a code
+# constant, not a setting: the wording is part of the invite's trust
+# story for franchise employees and shouldn't drift per-operator.
+INVITE_MESSAGE_BODY = (
+    "You're being invited to your store's Viva Engage (Yammer) community "
+    "by Fishfood Group. Click 'Accept invitation' below and sign in with "
+    "this email address to get connected. If you weren't expecting this, "
+    "check with your store manager before accepting."
+)
+
 
 class GraphError(Exception):
     """Raised when Graph returns a non-success status."""
@@ -170,6 +181,10 @@ class GraphClient:
             "inviteRedirectUrl": redirect_url,
             "sendInvitationMessage": send_invitation_message,
         }
+        if send_invitation_message:
+            body["invitedUserMessageInfo"] = {
+                "customizedMessageBody": INVITE_MESSAGE_BODY,
+            }
         resp = self._request("POST", "/invitations", json=body)
         return resp.json()
 
@@ -405,18 +420,24 @@ class GraphClient:
 
         requests_body = []
         for idx, inv in enumerate(invitations):
+            send_message = bool(inv.get("send_invitation_message", True))
+            body = {
+                "invitedUserEmailAddress": inv["email"],
+                "invitedUserDisplayName": inv.get("display_name") or inv["email"],
+                "inviteRedirectUrl": inv.get("redirect_url")
+                    or "https://myapps.microsoft.com",
+                "sendInvitationMessage": send_message,
+            }
+            if send_message:
+                body["invitedUserMessageInfo"] = {
+                    "customizedMessageBody": INVITE_MESSAGE_BODY,
+                }
             requests_body.append({
                 "id": str(idx),
                 "method": "POST",
                 "url": "/invitations",
                 "headers": {"Content-Type": "application/json"},
-                "body": {
-                    "invitedUserEmailAddress": inv["email"],
-                    "invitedUserDisplayName": inv.get("display_name") or inv["email"],
-                    "inviteRedirectUrl": inv.get("redirect_url")
-                        or "https://myapps.microsoft.com",
-                    "sendInvitationMessage": bool(inv.get("send_invitation_message", True)),
-                },
+                "body": body,
             })
 
         resp = self._request("POST", "/$batch", json={"requests": requests_body})
