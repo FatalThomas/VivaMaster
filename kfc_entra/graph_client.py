@@ -131,7 +131,7 @@ class GraphClient:
     # ---------- users ----------
     def list_users(self, search: str | None = None, top: int = 100) -> list[GraphUser]:
         params: dict[str, Any] = {
-            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime,externalUserState",
             "$top": top,
             "$orderby": "displayName",
         }
@@ -161,7 +161,7 @@ class GraphClient:
             "GET",
             f"/users/{user_id}",
             params={
-                "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+                "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime,externalUserState",
             },
         )
         return GraphUser.from_api(resp.json())
@@ -247,7 +247,7 @@ class GraphClient:
         and nested groups are filtered out at the Graph layer.
         """
         params: dict[str, Any] = {
-            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime,externalUserState",
             "$top": 999,
         }
         raw = self._collect_paged(
@@ -263,7 +263,7 @@ class GraphClient:
         ConsistencyLevel: eventual plus $count=true.
         """
         params: dict[str, Any] = {
-            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime,externalUserState",
             "$top": 999,
         }
         extra_headers: dict | None = None
@@ -278,7 +278,7 @@ class GraphClient:
         """Find a user by mail / UPN / otherMails. Returns None when not found."""
         safe = email.replace("'", "''")
         params = {
-            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime,externalUserState",
             "$filter": (
                 f"mail eq '{safe}' or userPrincipalName eq '{safe}' "
                 f"or otherMails/any(c:c eq '{safe}')"
@@ -602,7 +602,7 @@ class GraphClient:
         matters when computing "who's in the group but not in the report".
         """
         params: dict[str, Any] = {
-            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime,externalUserState",
             "$top": 999,
         }
         raw = self._collect_paged(
@@ -680,7 +680,7 @@ class GraphClient:
     def list_group_owners(self, group_id: str) -> list[GraphUser]:
         """Return every user owner of a group (paged). Filters to users only."""
         params: dict[str, Any] = {
-            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime",
+            "$select": "id,displayName,userPrincipalName,mail,userType,accountEnabled,createdDateTime,externalUserState",
             "$top": 999,
         }
         raw = self._collect_paged(

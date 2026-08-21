@@ -384,6 +384,8 @@ a:hover { text-decoration: underline; }
 }
 .badge-member { background: #d6f5e0; color: var(--ok); }
 .badge-guest  { background: #fde7c8; color: var(--warn); }
+.badge-pending  { background: #fff2c3; color: var(--warn); }
+.badge-accepted { background: #d6f5e0; color: var(--ok); }
 
 .empty {
   text-align: center;

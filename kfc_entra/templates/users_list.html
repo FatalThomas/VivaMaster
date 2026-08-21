@@ -27,6 +27,9 @@
        href="{{ url_for('main.users_list', type='members', q=search or None) }}">Members only</a>
     <a class="chip {{ 'chip-active' if type_filter == 'guests' else '' }}"
        href="{{ url_for('main.users_list', type='guests', q=search or None) }}">Guests only</a>
+    <a class="chip {{ 'chip-active' if type_filter == 'pending' else '' }}"
+       href="{{ url_for('main.users_list', type='pending', q=search or None) }}"
+       title="Guests whose invitation email hasn't been accepted yet">Pending invites</a>
   </div>
 
   <div class="bulk-actions-row">
@@ -46,6 +49,7 @@
         <th>Display name</th>
         <th>UPN / Email</th>
         <th>Type</th>
+        <th>Invite</th>
         <th>Enabled</th>
         <th class="actions-col">Actions</th>
       </tr>
@@ -74,6 +78,15 @@
             <span class="badge">{{ u.user_type or 'unknown' }}</span>
           {% endif %}
         </td>
+        <td>
+          {% if u.external_user_state == 'PendingAcceptance' %}
+            <span class="badge badge-pending" title="Invitation sent but not yet accepted">Pending</span>
+          {% elif u.external_user_state == 'Accepted' %}
+            <span class="badge badge-accepted" title="Invitation accepted - user has signed in">Accepted</span>
+          {% else %}
+            <span class="muted" title="Native account - was never invited">&mdash;</span>
+          {% endif %}
+        </td>
         <td>{{ 'Yes' if u.account_enabled else 'No' }}</td>
         <td class="actions-col">
           <div class="row-actions">
@@ -91,7 +104,7 @@
         </td>
       </tr>
       <tr class="user-groups-row" data-user-id="{{ u.id }}" hidden>
-        <td colspan="6">
+        <td colspan="7">
           <div class="user-groups-panel">Loading&hellip;</div>
         </td>
       </tr>

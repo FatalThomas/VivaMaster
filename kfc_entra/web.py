@@ -454,7 +454,7 @@ def dashboard():
 def users_list():
     search = (request.args.get("q") or "").strip() or None
     type_filter = (request.args.get("type") or "all").lower()
-    if type_filter not in ("all", "members", "guests"):
+    if type_filter not in ("all", "members", "guests", "pending"):
         type_filter = "all"
     refresh = request.args.get("refresh") == "1"
 
@@ -480,6 +480,8 @@ def users_list():
                 users = [u for u in users if u.user_type == "Member"]
             elif type_filter == "guests":
                 users = [u for u in users if u.user_type == "Guest"]
+            elif type_filter == "pending":
+                users = [u for u in users if u.external_user_state == "PendingAcceptance"]
             cache_key = None
         else:
             # Browse path: push the userType filter to Graph and walk every
@@ -492,8 +494,13 @@ def users_list():
             if cached is not None:
                 users = cached
             else:
-                wanted = {"members": "Member", "guests": "Guest"}.get(type_filter)
-                users = client.list_users_by_type(wanted)
+                if type_filter == "pending":
+                    # Dedicated Graph filter - same query the Re-invites
+                    # scan uses, so the two views always agree.
+                    users = client.list_pending_acceptance_users()
+                else:
+                    wanted = {"members": "Member", "guests": "Guest"}.get(type_filter)
+                    users = client.list_users_by_type(wanted)
                 users.sort(key=lambda u: (u.display_name or "").lower())
                 if sid:
                     _users_cache_put(sid, cache_key, users)
