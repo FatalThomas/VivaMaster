@@ -28,7 +28,8 @@
 
   <p class="muted device-fallback">
     Browser didn't open? Visit
-    <code class="device-url" id="device-url">{{ info.verification_uri }}</code>
+    <a class="device-url" id="device-url" target="_blank" rel="noopener"
+       href="{{ info.verification_uri_complete }}"><code>{{ info.verification_uri }}</code></a>
     in any browser and paste the code above.
   </p>
 
@@ -59,19 +60,55 @@
   }
 
   function copyCode(silent) {
-    return navigator.clipboard.writeText(code).then(function () {
+    // navigator.clipboard is missing in some WebView2 / non-secure
+    // contexts - never let a clipboard failure break the caller.
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(code).then(function () {
+          if (!silent) kfcToast("Code copied to clipboard.", "success");
+        }).catch(function () { legacyCopy(silent); });
+      }
+    } catch (e) { /* fall through to legacy path */ }
+    legacyCopy(silent);
+  }
+
+  function legacyCopy(silent) {
+    try {
+      var ta = document.createElement("textarea");
+      ta.value = code;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
       if (!silent) kfcToast("Code copied to clipboard.", "success");
-    }).catch(function () {
+    } catch (e) {
       if (!silent) kfcToast("Couldn't copy - select the code manually.", "warning");
-    });
+    }
   }
 
   document.getElementById("device-code").addEventListener("click", function () { copyCode(false); });
   document.getElementById("copy-code-btn").addEventListener("click", function () { copyCode(false); });
 
+  function openFallbackTab() {
+    // Last resort: open a new tab from this window. In a normal browser
+    // this is exactly "default browser, new tab"; popup blockers can
+    // refuse, in which case we surface the manual URL.
+    var w = null;
+    try { w = window.open(verifyPrefilled, "_blank", "noopener"); } catch (e) {}
+    if (!w) {
+      kfcToast("Couldn't open a browser. Visit " + verifyPlain +
+               " and enter the code shown above.", "warning");
+    }
+  }
+
   document.getElementById("open-browser-btn").addEventListener("click", function () {
-    // Copy first as a fallback in case the prefilled URL fails to populate.
-    copyCode(true);
+    // Copy as a convenience, but never let it block the open. The
+    // server-side launch (os.startfile / open / xdg-open) is what puts
+    // the page in the user's *default* browser even from the desktop
+    // app shell; window.open is the fallback for plain-browser use.
+    try { copyCode(true); } catch (e) { /* ignore */ }
     fetch({{ url_for('auth.login_open_browser') | tojson }}, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -83,12 +120,10 @@
       if (data.opened) {
         kfcToast("Browser opened. Sign in there - this window will catch up.", "success");
       } else {
-        kfcToast("Couldn't launch a browser. Visit " + verifyPlain + " manually.", "warning");
+        openFallbackTab();
       }
     })
-    .catch(function () {
-      kfcToast("Couldn't launch a browser. Visit " + verifyPlain + " manually.", "warning");
-    });
+    .catch(openFallbackTab);
   });
 
   function poll() {
